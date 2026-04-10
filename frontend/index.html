@@ -94,5 +94,18 @@
 
     <script src="js/auth.js"></script>
     <script src="js/main.js"></script>
+    
+    <script>
+        function verificarLoginYRedirigir(event) {
+            event.preventDefault();
+            const usuarioLogueado = localStorage.getItem("usuarioLogueado");
+            
+            if (usuarioLogueado) {
+                window.location.href = "pages/carrito.html";
+            } else {
+                window.location.href = "pages/login.html";
+            }
+        }
+    </script>
 </body>
 </html>
