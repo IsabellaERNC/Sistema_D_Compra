@@ -22,19 +22,14 @@
 
     <script src="js/main.js"></script>
     
-    <!-- Agregar esta función para verificar login -->
     <script>
         function verificarLoginYRedirigir(event) {
             event.preventDefault();
-            
-            // Verificar si el usuario ha iniciado sesión
             const usuarioLogueado = localStorage.getItem("usuarioLogueado");
             
             if (usuarioLogueado) {
-                // Si ya inició sesión, va al carrito
                 window.location.href = "pages/carrito.html";
             } else {
-                // Si no ha iniciado sesión, va al login
                 window.location.href = "pages/login.html";
             }
         }
