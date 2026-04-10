@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirmación de Compra</title>
+    <link rel="stylesheet" href="../css/styles.css">
+    <style>
+        .confirmacion-wrap {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 60px 20px;
+        }
+        .caja-confirmacion {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 520px;
+            width: 100%;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .caja-confirmacion .icono {
+            font-size: 4rem;
+            margin-bottom: 16px;
+        }
+        .caja-confirmacion h2 {
+            color: #2E4057;
+            margin-bottom: 12px;
+        }
+        .caja-confirmacion p {
+            color: #666;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        .nombre-usuario {
+            color: #27ae60;
+            font-weight: 700;
+        }
+        .btn-volver {
+            display: inline-block;
+            background: #2E4057;
+            color: white;
+            padding: 12px 28px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .btn-volver:hover {
+            background: #4A7B9D;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="nav-izq">
+            <h1>🛒 Sistema de Compras</h1>
+        </div>
+        <div class="nav-der">
+            <a href="../index.html" class="nav-link">🏠 Inicio</a>
+            <div id="auth-nav-btn"></div>
+        </div>
+    </header>
+
+    <main class="confirmacion-wrap">
+        <div class="caja-confirmacion">
+            <div class="icono">✅</div>
+            <h2>¡Compra confirmada!</h2>
+            <p>
+                Gracias, <span class="nombre-usuario" id="nombre-comprador">usuario</span>. 
+                Tu pedido ha sido procesado exitosamente. 
+                Recibirás una notificación cuando esté listo.
+            </p>
+            <a href="../index.html" class="btn-volver">← Volver al catálogo</a>
+        </div>
+    </main>
+
+    <script src="../js/auth.js"></script>
+    <script>
+        if (!isLoggedIn()) {
+            window.location.href = 'carrito.html';
+        }
+
+        const usuario = getUsuario();
+        if (usuario) {
+            document.getElementById('nombre-comprador').textContent = usuario.nombre;
+        }
+
+        localStorage.removeItem('carrito');
+        localStorage.removeItem('stock');
+    </script>
+</body>
+</html>
