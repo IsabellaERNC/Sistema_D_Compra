@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesión - Sistema de Compra</title>
+    <link rel="stylesheet" href="../css/styles.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            width: 350px;
+        }
+        h2 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .error {
+            color: red;
+            font-size: 14px;
+            margin-top: 10px;
+            text-align: center;
+        }
+        .register-link {
+            text-align: center;
+            margin-top: 15px;
+        }
+        .register-link a {
+            color: #007bff;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h2>🔐 Iniciar Sesión</h2>
+        <p style="text-align:center; color:#666;">Obligatorio para continuar con el pago</p>
+        
+        <input type="email" id="email" placeholder="Correo electrónico" required>
+        <input type="password" id="password" placeholder="Contraseña" required>
+        
+        <button onclick="iniciarSesion()">Iniciar Sesión</button>
+        
+        <div id="errorMsg" class="error"></div>
+        
+        <div class="register-link">
+            <a href="#">¿No tienes cuenta? Regístrate</a>
+        </div>
+    </div>
+
+    <script>
+        function iniciarSesion() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('errorMsg');
+            
+            // Validaciones básicas
+            if (email === "" || password === "") {
+                errorDiv.innerText = "❌ Completa todos los campos";
+                return;
+            }
+            
+            if (!email.includes("@") || !email.includes(".")) {
+                errorDiv.innerText = "❌ Correo electrónico inválido";
+                return;
+            }
+            
+            if (password.length < 4) {
+                errorDiv.innerText = "❌ La contraseña debe tener al menos 4 caracteres";
+                return;
+            }
+            
+            // Simular usuarios válidos (para prueba)
+            // En un proyecto real, esto se validaría contra el backend
+            const usuariosValidos = [
+                { email: "usuario@test.com", password: "1234" },
+                { email: "cliente@ejemplo.com", password: "abcd" }
+            ];
+            
+            const usuarioEncontrado = usuariosValidos.find(
+                u => u.email === email && u.password === password
+            );
+            
+            if (usuarioEncontrado) {
+                // Guardar sesión en localStorage
+                localStorage.setItem("usuarioLogueado", JSON.stringify({
+                    email: email,
+                    loginTime: new Date().toISOString()
+                }));
+                
+                errorDiv.innerText = "";
+                errorDiv.style.color = "green";
+                errorDiv.innerText = "✅ Inicio de sesión exitoso. Redirigiendo...";
+                
+                // Redirigir al formulario de pago
+                setTimeout(() => {
+                    window.location.href = "pago.html";
+                }, 1000);
+            } else {
+                errorDiv.innerText = "❌ Usuario o contraseña incorrectos";
+            }
+        }
+    </script>
+</body>
+</html>
