@@ -1,4 +1,7 @@
-let carrito = JSON.parse(localStorage.getItem('carrito')) || [];
+// getCarritoKey() viene de auth.js — disponible en todas las páginas
+
+// Sin IIFE de migración: main.js ya escribe en la clave correcta
+let carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
 
 function getStock() {
     return JSON.parse(localStorage.getItem('stock')) || [];
@@ -14,8 +17,8 @@ function mostrarCarrito() {
         return;
     }
 
-    carrito.forEach((item, index) => {
-        const stockDisponible = getStock().find(p => p.id === item.id)?.stock || 0;
+    carrito.forEach(function(item, index) {
+        const stockDisponible = getStock().find(function(p) { return p.id === item.id; })?.stock || 0;
         lista.innerHTML += `
             <div class="item-carrito">
                 <h3>${item.nombre}</h3>
@@ -23,7 +26,7 @@ function mostrarCarrito() {
                 <div class="controles">
                     <button onclick="disminuir(${index})">➖</button>
                     <span>${item.cantidad}</span>
-                    <button onclick="aumentar(${index})" 
+                    <button onclick="aumentar(${index})"
                         ${stockDisponible <= 0 ? 'disabled style="opacity:0.4"' : ''}>➕</button>
                 </div>
                 <p>Subtotal: $${(item.precio * item.cantidad).toLocaleString()}</p>
@@ -37,10 +40,10 @@ function mostrarCarrito() {
 
 function aumentar(index) {
     const productos = getStock();
-    const producto = productos.find(p => p.id === carrito[index].id);
+    const producto  = productos.find(function(p) { return p.id === carrito[index].id; });
 
     if (!producto || producto.stock <= 0) {
-        alert(`⚠️ No hay más stock disponible de "${carrito[index].nombre}".`);
+        alert('⚠️ No hay más stock disponible de "' + carrito[index].nombre + '".');
         return;
     }
 
@@ -52,7 +55,7 @@ function aumentar(index) {
 
 function disminuir(index) {
     const productos = getStock();
-    const producto = productos.find(p => p.id === carrito[index].id);
+    const producto  = productos.find(function(p) { return p.id === carrito[index].id; });
 
     if (carrito[index].cantidad > 1) {
         carrito[index].cantidad--;
@@ -68,7 +71,7 @@ function disminuir(index) {
 
 function eliminar(index) {
     const productos = getStock();
-    const producto = productos.find(p => p.id === carrito[index].id);
+    const producto  = productos.find(function(p) { return p.id === carrito[index].id; });
     if (producto) producto.stock += carrito[index].cantidad;
 
     localStorage.setItem('stock', JSON.stringify(productos));
@@ -78,8 +81,8 @@ function eliminar(index) {
 
 function vaciarCarrito() {
     const productos = getStock();
-    carrito.forEach(item => {
-        const producto = productos.find(p => p.id === item.id);
+    carrito.forEach(function(item) {
+        const producto = productos.find(function(p) { return p.id === item.id; });
         if (producto) producto.stock += item.cantidad;
     });
     localStorage.setItem('stock', JSON.stringify(productos));
@@ -88,12 +91,12 @@ function vaciarCarrito() {
 }
 
 function calcularTotal() {
-    const total = carrito.reduce((sum, item) => sum + (item.precio * item.cantidad), 0);
+    const total = carrito.reduce(function(sum, item) { return sum + (item.precio * item.cantidad); }, 0);
     document.getElementById('total').innerText = '$' + total.toLocaleString();
 }
 
 function guardar() {
-    localStorage.setItem('carrito', JSON.stringify(carrito));
+    localStorage.setItem(getCarritoKey(), JSON.stringify(carrito));
     mostrarCarrito();
 }
 

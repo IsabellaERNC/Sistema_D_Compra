@@ -12,7 +12,6 @@ function getUsuario() {
     const u = localStorage.getItem('usuario');
     return u ? JSON.parse(u) : null;
 }
-
 function logout() {
     localStorage.removeItem('token');
     localStorage.removeItem('usuario');
@@ -194,6 +193,16 @@ async function handleRegister() {
     } finally {
         btn.disabled = false;
         btn.textContent = 'Crear cuenta';
+    }
+}
+
+// ─── Clave de carrito: compartida por main.js y carrito.js ───────────────
+function getCarritoKey() {
+    try {
+        const usuario = typeof getUsuario === 'function' ? getUsuario() : null;
+        return usuario && usuario.id ? `carrito_${usuario.id}` : 'carrito_guest';
+    } catch (e) {
+        return 'carrito_guest';
     }
 }
 

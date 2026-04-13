@@ -108,14 +108,31 @@
     </div>
 
     <script src="../js/auth.js"></script>
-    <script>
-        if (isLoggedIn()) {
-            window.location.href = '../index.html';
-        }
+<script>
+    function onLoginExitoso() {
+        const usuario  = getUsuario();
+        const userKey  = `carrito_${usuario.id}`;
+        const guestKey = 'carrito_guest';
 
-        function onLoginExitoso() {
-            window.location.href = '../index.html';
-        }
-    </script>
+        const carritoGuest   = JSON.parse(localStorage.getItem(guestKey)) || [];
+        const carritoUsuario = JSON.parse(localStorage.getItem(userKey))  || [];
+
+        carritoGuest.forEach(itemGuest => {
+            const existente = carritoUsuario.find(i => i.id === itemGuest.id);
+            if (existente) {
+                existente.cantidad += itemGuest.cantidad;
+            } else {
+                carritoUsuario.push(itemGuest);
+            }
+        });
+
+        localStorage.removeItem(guestKey);
+        localStorage.setItem(userKey, JSON.stringify(carritoUsuario));
+
+        // No se toca 'carrito' en memoria — no existe en esta página
+        renderAuthNav();
+        window.location.href = '../index.html'; // redirige al inicio tras login
+    }
+</script>
 </body>
 </html>

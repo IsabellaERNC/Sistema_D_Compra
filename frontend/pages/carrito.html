@@ -121,7 +121,6 @@
 
         <div class="nav-der">
             <a href="../index.html" class="nav-link">← Seguir comprando</a>
-
             <div id="auth-nav-btn"></div>
         </div>
     </header>
@@ -143,7 +142,6 @@
 
             <div id="form-login">
                 <div id="error-login" class="error-msg"></div>
-
                 <div class="campo">
                     <label for="login-email">Correo electrónico</label>
                     <input type="email" id="login-email" placeholder="tu@correo.com">
@@ -163,7 +161,6 @@
 
             <div id="form-register" style="display:none;">
                 <div id="error-register" class="error-msg"></div>
-
                 <div class="campo">
                     <label for="reg-nombre">Nombre completo</label>
                     <input type="text" id="reg-nombre" placeholder="Nicolás García">
@@ -210,7 +207,6 @@
                 alert('Tu carrito está vacío. Agrega productos antes de pagar.');
                 return;
             }
-
             if (!isLoggedIn()) {
                 abrirModal('login');
             } else {
@@ -218,9 +214,32 @@
             }
         }
 
+        // Migra el carrito guest al del usuario y redirige al pago
         function onLoginExitoso() {
-            renderAuthNav();        
-            irAPagar();             
+            const usuario  = getUsuario();
+            const userKey  = 'carrito_' + usuario.id;
+            const guestKey = 'carrito_guest';
+
+            const carritoGuest   = JSON.parse(localStorage.getItem(guestKey)) || [];
+            const carritoUsuario = JSON.parse(localStorage.getItem(userKey))  || [];
+
+            carritoGuest.forEach(function(itemGuest) {
+                const existente = carritoUsuario.find(function(i) { return i.id === itemGuest.id; });
+                if (existente) {
+                    existente.cantidad += itemGuest.cantidad;
+                } else {
+                    carritoUsuario.push(itemGuest);
+                }
+            });
+
+            localStorage.removeItem(guestKey);
+            localStorage.setItem(userKey, JSON.stringify(carritoUsuario));
+
+            // Actualiza la variable en memoria de carrito.js y re-renderiza
+            carrito = carritoUsuario;
+            mostrarCarrito();
+            renderAuthNav();
+            irAPagar();
         }
 
         function irAPagar() {
