@@ -1,6 +1,4 @@
 // getCarritoKey() viene de auth.js — disponible en todas las páginas
-
-// Sin IIFE de migración: main.js ya escribe en la clave correcta
 let carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
 
 function getStock() {
@@ -101,3 +99,57 @@ function guardar() {
 }
 
 mostrarCarrito();
+
+
+// ==========================================
+// MÓDULO DE PAGOS Y CONEXIÓN CON BACKEND
+// ==========================================
+
+async function procesarPagoConBackend() {
+    const token = localStorage.getItem('token');
+
+    if (!token) {
+        alert("¡Pilas! Debes iniciar sesión para poder pagar.");
+        window.location.href = 'login.html';
+        return;
+    }
+
+    const total = carrito.reduce((sum, item) => sum + (item.precio * item.cantidad), 0);
+    console.log("Calculando total en carrito:", total);
+
+    if (total <= 0) {
+        alert("El carrito está vacío. No puedes procesar un pago en $0.");
+        return;
+    }
+
+    const nombreUsuario = JSON.parse(localStorage.getItem('usuario'))?.nombre || 'Usuario';
+
+    const datosTransaccion = {
+        monto: total,
+        descripcion: `Compra realizada por ${nombreUsuario}`
+    };
+
+    try {
+        const respuesta = await fetch('http://localhost:3000/api/transacciones', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(datosTransaccion)
+        });
+
+        const resultado = await respuesta.json();
+
+        if (respuesta.ok) {
+            // ✅ CORRECCIÓN BUG 2: resultado.transaccion.id (no resultado.id)
+            console.log('✅ Transacción registrada (Pendiente) con ID:', resultado.transaccion.id);
+            window.location.href = `../pages/pago.html?transactionId=${resultado.transaccion.id}`;
+        } else {
+            alert('Error del servidor: ' + (resultado.error || 'No se pudo crear la transacción'));
+        }
+    } catch (error) {
+        console.error('❌ Error de conexión:', error);
+        alert('No hay conexión con el backend. Revisa que el servidor Node esté corriendo.');
+    }
+}
