@@ -1,8 +1,8 @@
-// getCarritoKey() viene de auth.js — disponible en todas las páginas
 let carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
 
 function getStock() {
-    return JSON.parse(localStorage.getItem('stock')) || [];
+
+    return [];
 }
 
 function mostrarCarrito() {
@@ -15,17 +15,16 @@ function mostrarCarrito() {
         return;
     }
 
+
     carrito.forEach(function(item, index) {
-        const stockDisponible = getStock().find(function(p) { return p.id === item.id; })?.stock || 0;
         lista.innerHTML += `
             <div class="item-carrito">
                 <h3>${item.nombre}</h3>
-                <p>Precio unitario: $${item.precio.toLocaleString()}</p>
+                <p>Precio unitario: $${Number(item.precio).toLocaleString()}</p>
                 <div class="controles">
                     <button onclick="disminuir(${index})">➖</button>
                     <span>${item.cantidad}</span>
-                    <button onclick="aumentar(${index})"
-                        ${stockDisponible <= 0 ? 'disabled style="opacity:0.4"' : ''}>➕</button>
+                    <button onclick="aumentar(${index})">➕</button>
                 </div>
                 <p>Subtotal: $${(item.precio * item.cantidad).toLocaleString()}</p>
                 <button onclick="eliminar(${index})">🗑️ Eliminar</button>
@@ -37,53 +36,27 @@ function mostrarCarrito() {
 }
 
 function aumentar(index) {
-    const productos = getStock();
-    const producto  = productos.find(function(p) { return p.id === carrito[index].id; });
-
-    if (!producto || producto.stock <= 0) {
-        alert('⚠️ No hay más stock disponible de "' + carrito[index].nombre + '".');
-        return;
-    }
 
     carrito[index].cantidad++;
-    producto.stock--;
-    localStorage.setItem('stock', JSON.stringify(productos));
     guardar();
 }
 
 function disminuir(index) {
-    const productos = getStock();
-    const producto  = productos.find(function(p) { return p.id === carrito[index].id; });
-
     if (carrito[index].cantidad > 1) {
         carrito[index].cantidad--;
-        if (producto) producto.stock++;
     } else {
-        if (producto) producto.stock++;
         carrito.splice(index, 1);
     }
-
-    localStorage.setItem('stock', JSON.stringify(productos));
     guardar();
 }
 
 function eliminar(index) {
-    const productos = getStock();
-    const producto  = productos.find(function(p) { return p.id === carrito[index].id; });
-    if (producto) producto.stock += carrito[index].cantidad;
-
-    localStorage.setItem('stock', JSON.stringify(productos));
     carrito.splice(index, 1);
     guardar();
 }
 
 function vaciarCarrito() {
-    const productos = getStock();
-    carrito.forEach(function(item) {
-        const producto = productos.find(function(p) { return p.id === item.id; });
-        if (producto) producto.stock += item.cantidad;
-    });
-    localStorage.setItem('stock', JSON.stringify(productos));
+
     carrito = [];
     guardar();
 }
@@ -98,55 +71,103 @@ function guardar() {
     mostrarCarrito();
 }
 
+const AUTH_LOGIN_URL = 'http://localhost:4000/auth/login?redirect=';
+
+function verificarAuthYProcesarPago() {
+    const token = localStorage.getItem('token');
+    
+    if (!token) {
+        const currentUrl = encodeURIComponent(window.location.href);
+        window.location.href = AUTH_LOGIN_URL + currentUrl;
+        return false;
+    }
+    
+    procesarPagoConBackend();
+    return true;
+}
+
+
+async function handleAuthCallback() {
+    if (typeof procesarAuthCallback === 'function') {
+        await procesarAuthCallback();
+    } else {
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+
+        if (token) {
+            localStorage.setItem('token', token);
+            window.history.replaceState({}, document.title, window.location.pathname);
+            console.log('✅ Token recibido y guardado desde callback');
+        }
+    }
+
+    carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
+    mostrarCarrito();
+}
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    handleAuthCallback();
+});
+
 mostrarCarrito();
 
-
-// ==========================================
-// MÓDULO DE PAGOS Y CONEXIÓN CON BACKEND
-// ==========================================
 
 async function procesarPagoConBackend() {
     const token = localStorage.getItem('token');
 
     if (!token) {
         alert("¡Pilas! Debes iniciar sesión para poder pagar.");
-        window.location.href = 'login.html';
+        window.location.href = AUTH_LOGIN_URL + encodeURIComponent(window.location.href);
+        return;
+    }
+
+    if (carrito.length === 0) {
+        alert("El carrito está vacío. Agrega productos antes de pagar.");
         return;
     }
 
     const total = carrito.reduce((sum, item) => sum + (item.precio * item.cantidad), 0);
-    console.log("Calculando total en carrito:", total);
 
     if (total <= 0) {
-        alert("El carrito está vacío. No puedes procesar un pago en $0.");
+        alert("El total es $0. No puedes procesar un pago en $0.");
         return;
     }
 
-    const nombreUsuario = JSON.parse(localStorage.getItem('usuario'))?.nombre || 'Usuario';
 
-    const datosTransaccion = {
-        monto: total,
-        descripcion: `Compra realizada por ${nombreUsuario}`
+    const usuario = JSON.parse(localStorage.getItem('usuario'));
+    
+    const datosCheckout = {
+        items: carrito.map(item => ({
+            producto_id: item.id,
+            nombre: item.nombre,
+            cantidad: item.cantidad,
+            precio_unitario: item.precio
+        })),
+        total: total,
+        moneda: 'MXN'
     };
 
     try {
-        const respuesta = await fetch('http://localhost:3000/api/transacciones', {
+        const respuesta = await fetch('http://localhost:3000/api/checkout/iniciar', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
             },
-            body: JSON.stringify(datosTransaccion)
+            body: JSON.stringify(datosCheckout)
         });
 
         const resultado = await respuesta.json();
 
-        if (respuesta.ok) {
-            // ✅ CORRECCIÓN BUG 2: resultado.transaccion.id (no resultado.id)
-            console.log('✅ Transacción registrada (Pendiente) con ID:', resultado.transaccion.id);
-            window.location.href = `../pages/pago.html?transactionId=${resultado.transaccion.id}`;
+        if (respuesta.ok && resultado.init_point) {
+
+            console.log('🔄 Redireccionando al servicio de pagos...');
+            window.location.href = resultado.init_point;
+        } else if (resultado.error) {
+            alert('Error al iniciar checkout: ' + resultado.error);
         } else {
-            alert('Error del servidor: ' + (resultado.error || 'No se pudo crear la transacción'));
+            alert('Error del servidor: No se pudo iniciar el checkout');
         }
     } catch (error) {
         console.error('❌ Error de conexión:', error);

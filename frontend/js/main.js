@@ -1,24 +1,47 @@
-const productosBase = [
-    { id: 1, nombre: 'Producto 1', precio: 10000, stock: 3 },
-    { id: 2, nombre: 'Producto 2', precio: 25000, stock: 3 },
-    { id: 3, nombre: 'Producto 3', precio: 15000, stock: 3 },
-];
 
-if (!localStorage.getItem('stock')) {
-    localStorage.setItem('stock', JSON.stringify(productosBase));
+const API_URL = 'http://localhost:3000';
+
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    if (token) {
+        localStorage.setItem('token', token);
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+})();
+
+let productos = [];
+let carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
+
+async function cargarProductos() {
+    try {
+        const token = localStorage.getItem('token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        
+        const response = await fetch(`${API_URL}/api/productos`, { headers });
+        const data = await response.json();
+        
+        if (data.error) {
+            console.error('Error cargando productos:', data.error);
+
+            productos = [];
+            return;
+        }
+        
+        productos = data.productos || [];
+    } catch (err) {
+        console.error('Error de red cargando productos:', err);
+        productos = [];
+    }
 }
 
 function getStock() {
-    return JSON.parse(localStorage.getItem('stock'));
+    return productos;
 }
-
-// Lee desde la clave correcta (getCarritoKey viene de auth.js)
-let carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
 
 function mostrarProductos() {
     const lista = document.getElementById('lista-productos');
     lista.innerHTML = '';
-    const productos = getStock();
     const disponibles = productos.filter(p => p.stock > 0);
 
     if (disponibles.length === 0) {
@@ -30,9 +53,9 @@ function mostrarProductos() {
         lista.innerHTML += `
             <div class="producto">
                 <h3>${p.nombre}</h3>
-                <p>Precio: $${p.precio.toLocaleString()}</p>
+                <p>Precio: $${Number(p.precio).toLocaleString()}</p>
                 <p class="stock">Stock: ${p.stock} unidades</p>
-                <button onclick="agregarAlCarrito(${p.id})">
+                <button onclick="agregarAlCarrito('${p.id}')">
                     Agregar al carrito
                 </button>
             </div>
@@ -41,8 +64,7 @@ function mostrarProductos() {
 }
 
 function agregarAlCarrito(id) {
-    const productos = getStock();
-    const producto  = productos.find(p => p.id === id);
+    const producto = productos.find(p => p.id === id);
 
     if (!producto) {
         alert('Este producto no existe.');
@@ -62,8 +84,26 @@ function agregarAlCarrito(id) {
     }
 
     producto.stock--;
-    localStorage.setItem('stock', JSON.stringify(productos));
+    
     localStorage.setItem(getCarritoKey(), JSON.stringify(carrito));
+
+    // Sincronizar con backend si el usuario está autenticado
+    if (typeof isLoggedIn === 'function' && isLoggedIn()) {
+        const token = localStorage.getItem('token');
+        fetch(`${API_URL}/api/carrito`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                producto_id: producto.id,
+                nombre: producto.nombre,
+                precio_unitario: producto.precio,
+                cantidad: 1
+            })
+        }).catch(err => console.error('Error al sincronizar carrito con backend:', err));
+    }
 
     actualizarContador();
     mostrarProductos();
@@ -76,30 +116,7 @@ function actualizarContador() {
     if (el) el.innerText = total;
 }
 
-function onLoginExitoso() {
-    const usuario  = getUsuario();
-    const userKey  = 'carrito_' + usuario.id;
-    const guestKey = 'carrito_guest';
-
-    const carritoGuest   = JSON.parse(localStorage.getItem(guestKey)) || [];
-    const carritoUsuario = JSON.parse(localStorage.getItem(userKey))  || [];
-
-    carritoGuest.forEach(function(itemGuest) {
-        const existente = carritoUsuario.find(function(i) { return i.id === itemGuest.id; });
-        if (existente) {
-            existente.cantidad += itemGuest.cantidad;
-        } else {
-            carritoUsuario.push(itemGuest);
-        }
-    });
-
-    localStorage.removeItem(guestKey);
-    localStorage.setItem(userKey, JSON.stringify(carritoUsuario));
-
-    carrito = carritoUsuario;
-    renderAuthNav();
+cargarProductos().then(() => {
+    mostrarProductos();
     actualizarContador();
-}
-
-mostrarProductos();
-actualizarContador();
+});

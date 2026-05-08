@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Formulario de Pago - Sistema de Compra</title>
+    <title>Procesando Pago - Sistema de Compra</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -21,165 +21,123 @@
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             width: 450px;
+            text-align: center;
         }
         h2 {
-            text-align: center;
             margin-bottom: 20px;
             color: #333;
         }
+        .loading {
+            font-size: 18px;
+            color: #666;
+            margin: 20px 0;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .success {
+            color: #28a745;
+        }
+        .error {
+            color: #dc3545;
+        }
         button {
-            width: 100%;
-            padding: 12px;
-            background: #28a745;
+            padding: 12px 24px;
+            background: #007bff;
             color: white;
             border: none;
             border-radius: 5px;
             cursor: pointer;
             font-size: 16px;
-            margin-top: 10px;
+            margin-top: 20px;
         }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        button:hover:not(:disabled) {
-            background: #218838;
-        }
-        .volver {
-            background: #6c757d;
-            margin-top: 10px;
-        }
-        .volver:hover:not(:disabled) {
-            background: #5a6268;
-        }
-        .resumen {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-
-        /* ── Bloque reservado para la pasarela de pagos ── */
-        .bloque-pasarela {
-            border: 2px dashed #007bff;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-            text-align: center;
-            background: #f0f8ff;
-            color: #555;
-            font-size: 14px;
-        }
-        .bloque-pasarela strong {
-            display: block;
-            font-size: 15px;
-            color: #007bff;
-            margin-bottom: 8px;
+        button:hover {
+            background: #0056b3;
         }
     </style>
 </head>
 <body>
     <div class="pago-container">
-        <h2>💳 Formulario de Pago</h2>
-
-        <!-- Información del usuario autenticado -->
-        <div class="resumen" id="resumenUsuario">
-            <!-- Se completa por script al cargar la página -->
-        </div>
-
-        <!-- ════════════════════════════════════════════════
-             BLOQUE RESERVADO — PASARELA DE PAGOS
-             El grupo responsable debe integrar su módulo aquí.
-             Al completar el pago, deben llamar a: confirmarPago()
-             para que el backend actualice el estado de la transacción.
-             ════════════════════════════════════════════════ -->
-        <div class="bloque-pasarela" id="bloque-pasarela">
-            <strong>[ MÓDULO DE PASARELA DE PAGOS ]</strong>
-            Espacio reservado para el grupo responsable de la integración
-            de la pasarela de pagos. Llamar a <code>confirmarPago()</code>
-            una vez el pago sea aprobado por el procesador externo.
-        </div>
-        <!-- ══════════════════════════════════════════════ -->
-
-        <button id="btnPagar" onclick="confirmarPago()" disabled>Pagar ahora</button>
-        <button class="volver" onclick="volverAlCarrito()">← Volver al carrito</button>
+        <h2 id="titulo">⏳ Procesando pago...</h2>
+        <div class="spinner" id="spinner"></div>
+        <p id="mensaje">Por favor espera mientras procesamos tu pago.</p>
+        <button id="btnVolver" onclick="volver()" style="display: none;">Volver al carrito</button>
     </div>
 
     <script>
-        // ─────────────────────────────────────────────────
-        // 1. VERIFICACIÓN DE SESIÓN Y DATOS INICIALES
-        // ─────────────────────────────────────────────────
-        const token      = localStorage.getItem('token');
-        const usuarioRaw = localStorage.getItem('usuario');
+        // Este página ahora se usa solo como destino de retorno del servicio de pagos
+        // El flujo principal es: carrito -> checkout/iniciar -> redirect a MercadoPago -> return aquí
+        
+        const params = new URLSearchParams(window.location.search);
+        const status = params.get('status'); // puede ser 'approved', 'pending', 'rejected', etc.
+        const paymentId = params.get('payment_id'); // ID del pago en MercadoPago
+        
+        const titulo = document.getElementById('titulo');
+        const mensaje = document.getElementById('mensaje');
+        const spinner = document.getElementById('spinner');
+        const btnVolver = document.getElementById('btnVolver');
 
-        if (!token || !usuarioRaw) {
-            alert("⚠️ Sesión expirada o no iniciada. Debes loguearte.");
-            window.location.href = "login.html";
-        }
-
-        const usuario       = JSON.parse(usuarioRaw);
-        const transactionId = new URLSearchParams(window.location.search).get('transactionId');
-
-        // Mostrar info del usuario autenticado
-        document.getElementById("resumenUsuario").innerHTML = `
-            ✅ Sesión iniciada como: <strong>${usuario.email || usuario.nombre}</strong>
-        `;
-
-        // ─────────────────────────────────────────────────
-        // 2. COMUNICACIÓN CON EL BACKEND
-        //    Esta función la invoca el módulo de pasarela
-        //    del otro grupo una vez el pago sea aprobado.
-        // ─────────────────────────────────────────────────
-        async function confirmarPago() {
-            if (!transactionId) {
-                alert('❌ Error: No hay ID de transacción. Regresa al carrito.');
-                return;
-            }
-
-            const btnPagar = document.getElementById('btnPagar');
-            btnPagar.disabled  = true;
-            btnPagar.innerText = 'Confirmando pago...';
-
-            try {
-                const respuesta = await fetch(
-                    `http://localhost:3000/api/transacciones/${transactionId}/estado`,
-                    {
-                        method: 'PATCH',
-                        headers: {
-                            'Content-Type':  'application/json',
-                            'Authorization': `Bearer ${token}`
-                        },
-                        body: JSON.stringify({ estado: 'completada' })
+        // Si hay parámetros de pago, el servicio de pagos regresó aquí
+        if (status || paymentId) {
+            spinner.style.display = 'none';
+            btnVolver.style.display = 'inline-block';
+            
+            if (status === 'approved') {
+                titulo.innerText = '✅ Pago aprobado';
+                titulo.className = 'success';
+                mensaje.innerText = 'Tu pago ha sido procesado exitosamente. Serás redirigido a la confirmación.';
+                
+                // Limpiar carrito local y backend, redirigir a confirmación
+                const usuario = JSON.parse(localStorage.getItem('usuario'));
+                if (usuario) {
+                    localStorage.removeItem('carrito_' + usuario.id);
+                    // Limpiar carrito en backend (error silencioso, no bloquea)
+                    const token = localStorage.getItem('token');
+                    if (token) {
+                        fetch('/api/carrito', {
+                            method: 'DELETE',
+                            headers: { 'Authorization': 'Bearer ' + token }
+                        }).catch(() => {});
                     }
-                );
-
-                const resultado = await respuesta.json();
-
-                if (respuesta.ok) {
-                    // Guardar el total para la página de confirmación
-                    const carritoKey   = `carrito_${usuario.id}`;
-                    const carritoLocal = JSON.parse(localStorage.getItem(carritoKey)) || [];
-                    const total        = carritoLocal.reduce(
-                        (sum, item) => sum + (item.precio * item.cantidad), 0
-                    );
-                    localStorage.setItem('ultimoTotal', total);
-
-                    alert("✅ ¡Pago Exitoso! Redirigiendo...");
-                    window.location.href = "confirmacion.html";
-                } else {
-                    throw new Error(resultado.error || "Error al actualizar estado");
                 }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('❌ Fallo en el servidor: ' + error.message);
-                btnPagar.disabled  = false;
-                btnPagar.innerText = 'Pagar ahora';
+                localStorage.removeItem('carrito_guest');
+                
+                setTimeout(() => {
+                    window.location.href = 'confirmacion.html';
+                }, 2000);
+                
+            } else if (status === 'pending') {
+                titulo.innerText = '⏳ Pago pendiente';
+                mensaje.innerText = 'Tu pago está siendo procesado. Te notificaremos cuando sea confirmado.';
+                
+            } else if (status === 'rejected') {
+                titulo.innerText = '❌ Pago rechazado';
+                titulo.className = 'error';
+                mensaje.innerText = 'Tu pago fue rechazado. Por favor intenta con otro método de pago.';
+                
+            } else {
+                // Otros estados o solo payment_id sin status
+                titulo.innerText = 'ℹ️ Estado del pago';
+                mensaje.innerText = 'Payment ID: ' + (paymentId || 'N/A') + '\nStatus: ' + (status || 'desconocido');
             }
+        } else {
+            // No hay parámetros - el usuario llegó aquí directamente sin pasar por el pago
+            // Redirigir al carrito
+            window.location.href = 'carrito.html';
         }
 
-        function volverAlCarrito() {
-            window.location.href = "carrito.html";
+        function volver() {
+            window.location.href = 'carrito.html';
         }
     </script>
 </body>

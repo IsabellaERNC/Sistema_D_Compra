@@ -91,6 +91,15 @@
 
         localStorage.removeItem('carrito');
         localStorage.removeItem('stock');
+
+        // Limpiar carrito en backend (error silencioso, no bloquea)
+        const token = localStorage.getItem('token');
+        if (token) {
+            fetch('/api/carrito', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token }
+            }).catch(() => {});
+        }
     </script>
 </body>
 </html>

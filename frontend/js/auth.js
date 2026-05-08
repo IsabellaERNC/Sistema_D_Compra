@@ -12,6 +12,7 @@ function getUsuario() {
     const u = localStorage.getItem('usuario');
     return u ? JSON.parse(u) : null;
 }
+
 function logout() {
     localStorage.removeItem('token');
     localStorage.removeItem('usuario');
@@ -39,7 +40,7 @@ function renderAuthNav() {
         `;
     } else {
         container.innerHTML = `
-            <button class="btn-nav btn-login" onclick="abrirModal()">
+            <button class="btn-nav btn-login" onclick="redirectToAuth()">
                 🔑 Login
             </button>
         `;
@@ -58,145 +59,7 @@ document.addEventListener('click', function(e) {
     }
 });
 
-function abrirModal(tab = 'login') {
-    const modal = document.getElementById('auth-modal');
-    if (!modal) return;
-    modal.style.display = 'flex';
-    cambiarTab(tab);
-}
-
-function cerrarModal() {
-    const modal = document.getElementById('auth-modal');
-    if (modal) modal.style.display = 'none';
-    limpiarErrores();
-}
-
-document.addEventListener('click', function(e) {
-    const modal = document.getElementById('auth-modal');
-    if (modal && e.target === modal) cerrarModal();
-});
-
-function cambiarTab(tab) {
-    const tabLogin    = document.getElementById('tab-login');
-    const tabRegister = document.getElementById('tab-register');
-    const formLogin   = document.getElementById('form-login');
-    const formRegister = document.getElementById('form-register');
-
-    if (!tabLogin) return;
-
-    if (tab === 'login') {
-        tabLogin.classList.add('tab-activo');
-        tabRegister.classList.remove('tab-activo');
-        formLogin.style.display = 'block';
-        formRegister.style.display = 'none';
-    } else {
-        tabRegister.classList.add('tab-activo');
-        tabLogin.classList.remove('tab-activo');
-        formRegister.style.display = 'block';
-        formLogin.style.display = 'none';
-    }
-    limpiarErrores();
-}
-
-function mostrarError(id, msg) {
-    const el = document.getElementById(id);
-    if (el) { el.textContent = msg; el.style.display = 'block'; }
-}
-
-function limpiarErrores() {
-    ['error-login', 'error-register'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) { el.textContent = ''; el.style.display = 'none'; }
-    });
-}
-
-async function handleLogin() {
-    const email    = document.getElementById('login-email').value.trim();
-    const password = document.getElementById('login-password').value;
-    const btn      = document.getElementById('btn-login-submit');
-
-    if (!email || !password) {
-        mostrarError('error-login', 'Completa todos los campos.');
-        return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Ingresando...';
-
-    try {
-        const res = await fetch(`${API_URL}/api/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-            mostrarError('error-login', data.error || 'Error al iniciar sesión.');
-        } else {
-            localStorage.setItem('token',   data.token);
-            localStorage.setItem('usuario', JSON.stringify(data.usuario));
-            cerrarModal();
-            if (typeof onLoginExitoso === 'function') onLoginExitoso();
-            else renderAuthNav();
-        }
-    } catch (err) {
-        mostrarError('error-login', 'No se pudo conectar con el servidor.');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Ingresar';
-    }
-}
-
-async function handleRegister() {
-    const nombre   = document.getElementById('reg-nombre').value.trim();
-    const email    = document.getElementById('reg-email').value.trim();
-    const password = document.getElementById('reg-password').value;
-    const confirm  = document.getElementById('reg-confirm').value;
-    const btn      = document.getElementById('btn-register-submit');
-
-    if (!nombre || !email || !password || !confirm) {
-        mostrarError('error-register', 'Completa todos los campos.');
-        return;
-    }
-    if (password !== confirm) {
-        mostrarError('error-register', 'Las contraseñas no coinciden.');
-        return;
-    }
-    if (password.length < 6) {
-        mostrarError('error-register', 'La contraseña debe tener al menos 6 caracteres.');
-        return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Registrando...';
-
-    try {
-        const res = await fetch(`${API_URL}/api/auth/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nombre, email, password })
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-            mostrarError('error-register', data.error || 'Error al registrarse.');
-        } else {
-            localStorage.setItem('token',   data.token);
-            localStorage.setItem('usuario', JSON.stringify(data.usuario));
-            cerrarModal();
-            if (typeof onLoginExitoso === 'function') onLoginExitoso();
-            else renderAuthNav();
-        }
-    } catch (err) {
-        mostrarError('error-register', 'No se pudo conectar con el servidor.');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Crear cuenta';
-    }
-}
-
-// ─── Clave de carrito: compartida por main.js y carrito.js ───────────────
+// ????????? Carrito: compartida por main.js y carrito.js ??????????????
 function getCarritoKey() {
     try {
         const usuario = typeof getUsuario === 'function' ? getUsuario() : null;
@@ -208,14 +71,126 @@ function getCarritoKey() {
 
 document.addEventListener('DOMContentLoaded', function() {
     renderAuthNav();
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') cerrarModal();
-        if (e.key === 'Enter') {
-            const loginForm = document.getElementById('form-login');
-            const regForm   = document.getElementById('form-register');
-            if (loginForm && loginForm.style.display !== 'none')   handleLogin();
-            if (regForm   && regForm.style.display !== 'none')     handleRegister();
-        }
-    });
 });
+
+const AUTH_LOGIN_URL = 'http://localhost:4000/auth/login?redirect=';
+
+function guardarToken(token) {
+    localStorage.setItem('token', token);
+}
+
+function decodeTokenPayload(token) {
+    try {
+        const base64Url = token.split('.')[1];
+        if (!base64Url) return null;
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+            atob(base64)
+                .split('')
+                .map(function(c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                })
+                .join('')
+        );
+        return JSON.parse(jsonPayload);
+    } catch (e) {
+        return null;
+    }
+}
+
+function obtenerUsuarioDesdeToken(token) {
+    const payload = decodeTokenPayload(token);
+    if (!payload) return null;
+    const usuario = payload.usuario || payload.user || payload;
+    return {
+        id: usuario.id || usuario.sub || usuario.user_id,
+        nombre: usuario.nombre || usuario.name || usuario.username || '',
+        email: usuario.email || usuario.mail || ''
+    };
+}
+
+async function fusionarCarritoGuest(token) {
+    const guestCartRaw = localStorage.getItem('carrito_guest');
+    if (!guestCartRaw) return;
+
+    let guestCart;
+    try {
+        guestCart = JSON.parse(guestCartRaw);
+    } catch (e) {
+        console.error('Error parseando carrito guest:', e);
+        return;
+    }
+
+    if (!Array.isArray(guestCart) || guestCart.length === 0) return;
+
+    const items = guestCart.map(function(item) {
+        return {
+            producto_id: item.id,
+            nombre: item.nombre,
+            precio_unitario: item.precio,
+            cantidad: item.cantidad
+        };
+    });
+
+    try {
+        const respuesta = await fetch(API_URL + '/api/carrito/fusionar', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ items: items })
+        });
+
+        if (!respuesta.ok) {
+            console.error('Error fusionando carrito:', respuesta.status);
+            return;
+        }
+
+        const userKey = getCarritoKey();
+        let userCart = JSON.parse(localStorage.getItem(userKey)) || [];
+
+        guestCart.forEach(function(guestItem) {
+            const existing = userCart.find(function(item) { return item.id === guestItem.id; });
+            if (existing) {
+                existing.cantidad += guestItem.cantidad;
+            } else {
+                userCart.push({
+                    id: guestItem.id,
+                    nombre: guestItem.nombre,
+                    precio: guestItem.precio,
+                    cantidad: guestItem.cantidad
+                });
+            }
+        });
+
+        localStorage.setItem(userKey, JSON.stringify(userCart));
+        localStorage.removeItem('carrito_guest');
+        console.log('✅ Carrito guest fusionado exitosamente');
+    } catch (error) {
+        console.error('Error de conexión al fusionar carrito:', error);
+    }
+}
+
+async function procesarAuthCallback() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+
+    if (token) {
+        localStorage.setItem('token', token);
+
+        const usuario = obtenerUsuarioDesdeToken(token);
+        if (usuario && usuario.id) {
+            localStorage.setItem('usuario', JSON.stringify(usuario));
+        }
+
+        window.history.replaceState({}, document.title, window.location.pathname);
+        console.log('✅ Token recibido y guardado desde callback');
+
+        await fusionarCarritoGuest(token);
+    }
+}
+
+function redirectToAuth() {
+    window.location.href = AUTH_LOGIN_URL + encodeURIComponent(window.location.href);
+}

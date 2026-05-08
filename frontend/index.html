@@ -22,70 +22,7 @@
         </div>
     </header>
 
-    <div id="auth-modal">
-        <div class="modal-contenido">
-            <button class="modal-cerrar" onclick="cerrarModal()">✕</button>
-
-            <p class="modal-titulo">🔑 Accede a tu cuenta</p>
-
-            <div class="modal-tabs">
-                <button id="tab-login"    class="tab-activo" onclick="cambiarTab('login')">
-                    Iniciar sesión
-                </button>
-                <button id="tab-register" onclick="cambiarTab('register')">
-                    Registrarse
-                </button>
-            </div>
-
-            <div id="form-login">
-                <div id="error-login" class="error-msg"></div>
-
-                <div class="campo">
-                    <label for="login-email">Correo electrónico</label>
-                    <input type="email" id="login-email" placeholder="tu@correo.com">
-                </div>
-                <div class="campo">
-                    <label for="login-password">Contraseña</label>
-                    <input type="password" id="login-password" placeholder="••••••••">
-                </div>
-                <button id="btn-login-submit" class="btn-submit" onclick="handleLogin()">
-                    Ingresar
-                </button>
-                <p class="cambiar-tab">
-                    ¿No tienes cuenta?
-                    <a onclick="cambiarTab('register')">Regístrate gratis</a>
-                </p>
-            </div>
-
-            <div id="form-register" style="display:none;">
-                <div id="error-register" class="error-msg"></div>
-
-                <div class="campo">
-                    <label for="reg-nombre">Nombre completo</label>
-                    <input type="text" id="reg-nombre" placeholder="Nicolás García">
-                </div>
-                <div class="campo">
-                    <label for="reg-email">Correo electrónico</label>
-                    <input type="email" id="reg-email" placeholder="tu@correo.com">
-                </div>
-                <div class="campo">
-                    <label for="reg-password">Contraseña</label>
-                    <input type="password" id="reg-password" placeholder="Mínimo 6 caracteres">
-                </div>
-                <div class="campo">
-                    <label for="reg-confirm">Confirmar contraseña</label>
-                    <input type="password" id="reg-confirm" placeholder="Repite tu contraseña">
-                </div>
-                <button id="btn-register-submit" class="btn-submit" onclick="handleRegister()">
-                    Crear cuenta
-                </button>
-                <p class="cambiar-tab">
-                    ¿Ya tienes cuenta?
-                    <a onclick="cambiarTab('login')">Inicia sesión</a>
-                </p>
-            </div>
-        </div>
-    </div>
+    
 
     <main>
         <h2>Productos disponibles</h2>
@@ -94,18 +31,5 @@
 
     <script src="js/auth.js"></script>
     <script src="js/main.js"></script>
-    
-    <script>
-        function verificarLoginYRedirigir(event) {
-            event.preventDefault();
-            const usuarioLogueado = localStorage.getItem("usuarioLogueado");
-            
-            if (usuarioLogueado) {
-                window.location.href = "pages/carrito.html";
-            } else {
-                window.location.href = "pages/login.html";
-            }
-        }
-    </script>
 </body>
 </html>
