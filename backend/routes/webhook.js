@@ -6,6 +6,8 @@
 const express = require('express');
 const router  = express.Router();
 const pagosClient = require('../services/pagosClient');
+const productosClient = require('../services/productosClient');
+const notificacionesPedidosClient = require('../services/notificacionesPedidosClient');
 
 module.exports = (pool) => {
 
@@ -18,7 +20,7 @@ module.exports = (pool) => {
     router.post('/pago-confirmado', async (req, res) => {
         const rawBody = JSON.stringify(req.body);
         
-        // Leer signature de headers (soporta ambos formatos)
+
         const signature = req.headers['x-webhook-signature'] || req.headers['x-signature'];
 
         if (!signature) {
@@ -26,7 +28,7 @@ module.exports = (pool) => {
             return res.status(401).json({ error: 'Signature requerida' });
         }
 
-        // Validar signature
+
         try {
             const esValida = pagosClient.verificarSignature(rawBody, signature);
             
@@ -39,35 +41,34 @@ module.exports = (pool) => {
             return res.status(401).json({ error: 'Error al verificar signature' });
         }
 
-        // Extraer datos del payload
+
         const { evento, transaccion_id, referencia_externa, estado, monto, fecha_pago } = req.body;
 
-        // Validar datos mínimos requeridos
+
         if (!transaccion_id || !estado) {
             console.error('[POST /pago-confirmado] Payload incompleto:', req.body);
             return res.status(400).json({ error: 'Payload incompleto: se requiere transaccion_id y estado' });
         }
 
-        // Solo procesamos eventos de pago confirmado
+
         if (evento !== 'pago.confirmado' && evento !== 'payment.updated') {
-            console.log(`[POST /pago-confirmado] Evento no procesado: ${evento}`);
             return res.json({ mensaje: 'Evento ignorado' });
         }
 
-        // Mapear estado del servicio externo al estado de la DB
+
         const ESTADO_MAP = {
-            'approved': 'pagado',
-            'completed': 'pagado',
-            'pending': 'pendiente',
-            'rejected': 'fallido',
-            'cancelled': 'cancelado',
-            'refunded': 'cancelado'
+            'approved': 'APROBADA',
+            'completed': 'APROBADA',
+            'pending': 'PENDIENTE',
+            'rejected': 'RECHAZADA',
+            'cancelled': 'RECHAZADA',
+            'refunded': 'RECHAZADA'
         };
 
         const estadoDB = ESTADO_MAP[estado] || estado;
 
         try {
-            // Actualizar transacción en la DB
+
             const resultado = await pool.query(
                 `UPDATE transacciones
                  SET    estado = $1,
@@ -84,11 +85,64 @@ module.exports = (pool) => {
             }
 
             const transaccion = resultado.rows[0];
-            console.log(`[POST /pago-confirmado] Transacción ${transaccion.id} actualizada a estado: ${transaccion.estado}`);
 
-            if (estadoDB === 'pagado') {
+            if (estadoDB === 'APROBADA') {
                 await pool.query('DELETE FROM carrito WHERE usuario_id = $1', [transaccion.usuario_id]);
-                console.log(`[POST /pago-confirmado] Carrito limpiado para usuario ${transaccion.usuario_id}`);
+
+                const pedidoResult = await pool.query(
+                    `INSERT INTO pedidos (usuario_id, estado, items, monto_total, transaccion_id)
+                     VALUES ($1, 'Pendiente', $2, $3, $4)
+                     RETURNING id`,
+                    [transaccion.usuario_id, transaccion.items, transaccion.total, transaccion.id]
+                );
+                const pedidoId = pedidoResult.rows[0].id;
+
+                /* ── Notificar servicios externos (fallos aislados, no rollback) ── */
+                const items = typeof transaccion.items === 'string'
+                    ? JSON.parse(transaccion.items)
+                    : transaccion.items;
+
+                if (Array.isArray(items)) {
+                    for (const item of items) {
+                        try {
+                            await productosClient.deducirStock(item.producto_id, item.cantidad);
+                        } catch (stockErr) {
+                            console.error(`[POST /pago-confirmado] Error deduciendo stock para producto_id=${item.producto_id}:`, stockErr.message);
+                            await pool.query(
+                                `INSERT INTO eventos_pendientes (tipo, payload, intentos, estado)
+                                 VALUES ($1, $2, 0, 'pendiente')`,
+                                ['deducir_stock', JSON.stringify({ producto_id: item.producto_id, cantidad: item.cantidad, pedido_id: pedidoId })]
+                            );
+                        }
+                    }
+                }
+
+                try {
+                    await notificacionesPedidosClient.notificarPedidoCreado({
+                        pedido_id: pedidoId,
+                        usuario_id: transaccion.usuario_id,
+                        usuario_email: transaccion.usuario_email,
+                        items: items,
+                        monto_total: transaccion.total,
+                        moneda: transaccion.moneda,
+                        transaccion_id: transaccion.id
+                    });
+                } catch (notifErr) {
+                    console.error(`[POST /pago-confirmado] Error notificando pedido creado:`, notifErr.message);
+                    await pool.query(
+                        `INSERT INTO eventos_pendientes (tipo, payload, intentos, estado)
+                         VALUES ($1, $2, 0, 'pendiente')`,
+                        ['notificar_pedido', JSON.stringify({
+                            pedido_id: pedidoId,
+                            usuario_id: transaccion.usuario_id,
+                            usuario_email: transaccion.usuario_email,
+                            items: items,
+                            monto_total: transaccion.total,
+                            moneda: transaccion.moneda,
+                            transaccion_id: transaccion.id
+                        })]
+                    );
+                }
             }
 
             return res.json({

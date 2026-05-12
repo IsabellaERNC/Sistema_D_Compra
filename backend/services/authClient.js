@@ -78,7 +78,7 @@ async function register(email, password, nombre) {
     return { error: 'Email, contraseña y nombre son requeridos' };
   }
 
-  return request('/auth/register', {
+  return request('/register', {
     method: 'POST',
     body: JSON.stringify({ email, password, nombre })
   });
@@ -94,7 +94,7 @@ async function validateToken(token) {
     return { error: 'Token es requerido' };
   }
 
-  return request('/auth/me', {
+  return request('/me', {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${token}` 

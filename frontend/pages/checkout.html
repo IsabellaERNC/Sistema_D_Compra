@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkout - Resumen de Compra</title>
+    <link rel="stylesheet" href="../css/styles.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .item-resumen {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .item-resumen:last-child {
+            border-bottom: none;
+        }
+        .item-nombre {
+            font-weight: bold;
+        }
+        .item-detalle {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .totales {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .totales-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+        }
+        .totales-row.total {
+            font-size: 1.3em;
+            font-weight: bold;
+            border-top: 2px solid #ddd;
+            margin-top: 10px;
+            padding-top: 15px;
+        }
+        .envio-gratis {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .btn-confirmar {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1.2em;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .btn-confirmar:hover {
+            background: #218838;
+        }
+        .btn-volver {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            margin-top: 10px;
+            width: 100%;
+        }
+        .btn-volver:hover {
+            background: #5a6268;
+        }
+        .vacio {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .alerta {
+            background: #fff3cd;
+            color: #856404;
+            padding: 12px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Resumen de Compra</h1>
+
+        <div id="mensaje"></div>
+        <div id="lista-items"></div>
+        <div id="totales" class="totales" style="display:none;"></div>
+
+        <button id="btn-confirmar" class="btn-confirmar" onclick="iniciarCheckout()" style="display:none;">
+            Confirmar y pagar
+        </button>
+        <button class="btn-volver" onclick="window.location.href='carrito.html'">
+            ← Volver al carrito
+        </button>
+    </div>
+
+    <script src="../js/auth.js"></script>
+    <script src="../js/checkout.js"></script>
+
+    <script>
+        (function() {
+            // Si no está autenticado, redirigir a login
+            if (!isLoggedIn()) {
+                localStorage.setItem('redirect_after_login', 'checkout');
+                window.location.href = 'login.html?redirect=checkout';
+                return;
+            }
+
+            const carritoKey = (function() {
+                const usuario = JSON.parse(localStorage.getItem('usuario') || '{}');
+                return usuario.id ? 'carrito_' + usuario.id : 'carrito_guest';
+            })();
+
+            const carrito = JSON.parse(localStorage.getItem(carritoKey)) || [];
+
+            const listaEl = document.getElementById('lista-items');
+            const totalesEl = document.getElementById('totales');
+            const btnConfirmar = document.getElementById('btn-confirmar');
+
+            if (carrito.length === 0) {
+                listaEl.innerHTML = '<div class="vacio"><p>Tu carrito está vacío.</p></div>';
+                btnConfirmar.style.display = 'none';
+                return;
+            }
+
+            // Mostrar items
+            let html = '';
+            carrito.forEach(function(item) {
+                html += `
+                    <div class="item-resumen">
+                        <div>
+                            <div class="item-nombre">${item.nombre}</div>
+                            <div class="item-detalle">Cantidad: ${item.cantidad} x $${Number(item.precio).toLocaleString()}</div>
+                        </div>
+                        <div>$${(item.precio * item.cantidad).toLocaleString()}</div>
+                    </div>
+                `;
+            });
+            listaEl.innerHTML = html;
+
+            // Calcular totales
+            const subtotal = carrito.reduce(function(sum, item) {
+                return sum + (item.precio * item.cantidad);
+            }, 0);
+
+            const envio = subtotal < 500 ? 50 : 0;
+            const total = subtotal + envio;
+
+            totalesEl.innerHTML = `
+                <div class="totales-row">
+                    <span>Subtotal</span>
+                    <span>$${subtotal.toLocaleString()}</span>
+                </div>
+                <div class="totales-row">
+                    <span>Envío</span>
+                    <span>${envio === 0 ? '<span class="envio-gratis">GRATIS</span>' : '$' + envio.toLocaleString()}</span>
+                </div>
+                <div class="totales-row total">
+                    <span>Total</span>
+                    <span>$${total.toLocaleString()}</span>
+                </div>
+            `;
+            totalesEl.style.display = 'block';
+            btnConfirmar.style.display = 'block';
+        })();
+    </script>
+</body>
+</html>

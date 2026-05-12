@@ -1,9 +1,6 @@
+//localhost:3000';
+
 let carrito = JSON.parse(localStorage.getItem(getCarritoKey())) || [];
-
-function getStock() {
-
-    return [];
-}
 
 function mostrarCarrito() {
     const lista = document.getElementById('lista-carrito');
@@ -33,6 +30,92 @@ function mostrarCarrito() {
     });
 
     calcularTotal();
+}
+
+async function actualizarCantidad(productoId, cantidad) {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    try {
+        const respuesta = await fetch(`${API_URL}/api/carrito/${productoId}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ cantidad })
+        });
+        const resultado = await respuesta.json();
+
+        if (!respuesta.ok) {
+            if (respuesta.status === 409) {
+                alert(resultado.error);
+            } else {
+                alert(resultado.error || 'Error al actualizar cantidad');
+            }
+            return;
+        }
+
+        await mostrarCarritoBackend();
+    } catch (err) {
+        console.error('Error actualizando cantidad:', err);
+        alert('Error de conexión al actualizar cantidad');
+    }
+}
+
+async function mostrarCarritoBackend() {
+    const token = localStorage.getItem('token');
+    if (!token) return mostrarCarrito();
+
+    try {
+        const respuesta = await fetch(`${API_URL}/api/carrito`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await respuesta.json();
+
+        if (!respuesta.ok) {
+            console.error('Error cargando carrito:', data.error);
+            return mostrarCarrito();
+        }
+
+        const lista = document.getElementById('lista-carrito');
+        lista.innerHTML = '';
+
+        if (!data.items || data.items.length === 0) {
+            lista.innerHTML = '<p>⚠️ No hay productos en el carrito.</p>';
+            document.getElementById('total').innerText = '$0';
+            return;
+        }
+
+        data.items.forEach(function(item) {
+            lista.innerHTML += `
+                <div class="item-carrito">
+                    <h3>${item.producto_nombre}</h3>
+                    <p>Precio actual: $${Number(item.precio_actual).toLocaleString()}</p>
+                    <div class="controles">
+                        <button onclick="actualizarCantidad('${item.producto_id}', ${item.cantidad - 1})">➖</button>
+                        <span>${item.cantidad}</span>
+                        <button onclick="actualizarCantidad('${item.producto_id}', ${item.cantidad + 1})">➕</button>
+                    </div>
+                    <p>Subtotal: $${Number(item.subtotal).toLocaleString()}</p>
+                </div>
+            `;
+        });
+
+        const resumen = document.getElementById('resumen');
+        if (resumen) {
+            resumen.innerHTML = `
+                <p>Subtotal: $${Number(data.subtotal).toLocaleString()}</p>
+                <p>Envío: $${Number(data.envio).toLocaleString()}</p>
+                <h3>Total: <span id="total">$${Number(data.total).toLocaleString()}</span></h3>
+                <button id="btn-vaciar" onclick="vaciarCarrito()">Vaciar carrito</button>
+                <button type="button" onclick="intentarPagar()" class="btn-pago">Proceder al pago</button>
+            `;
+        }
+    } catch (err) {
+        console.error('Error de conexión cargando carrito:', err);
+        mostrarCarrito();
+    }
 }
 
 function aumentar(index) {
@@ -108,9 +191,12 @@ async function handleAuthCallback() {
 
 document.addEventListener('DOMContentLoaded', function() {
     handleAuthCallback();
+    if (typeof isLoggedIn === 'function' && isLoggedIn()) {
+        mostrarCarritoBackend();
+    } else {
+        mostrarCarrito();
+    }
 });
-
-mostrarCarrito();
 
 
 async function procesarPagoConBackend() {
@@ -149,7 +235,7 @@ async function procesarPagoConBackend() {
     };
 
     try {
-        const respuesta = await fetch('http://localhost:3000/api/checkout/iniciar', {
+        const respuesta = await fetch(`${API_URL}/api/checkout/iniciar`, {//localhost:3000/api/checkout/iniciar', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

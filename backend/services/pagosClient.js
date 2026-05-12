@@ -127,7 +127,28 @@ function verificarSignature(payload, signature) {
   );
 }
 
+/**
+ * Solicita reembolso de una transacción al servicio de pagos externo
+ * @param {string} transaccionId - ID de la transacción local
+ * @returns {Promise<object>} Respuesta del servicio de reembolso
+ */
+async function solicitarReembolso(transaccionId) {
+  if (!transaccionId) {
+    throw new Error('transaccionId es requerido');
+  }
+
+  const payload = { transaccionId };
+
+  const respuesta = await request('/reembolso', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+
+  return respuesta;
+}
+
 module.exports = {
   crearCheckout,
-  verificarSignature
+  verificarSignature,
+  solicitarReembolso
 };

@@ -4,10 +4,12 @@
  */
 
 const express = require('express');
-const router  = express.Router();
-const pagosClient = require('../services/pagosClient');
+const config          = require('../config');
+const pagosClient     = require('../services/pagosClient');
+const productosClient = require('../services/productosClient');
 
 module.exports = (pool, verificarToken) => {
+    const router = express.Router();
 
     /**
      * GET /carrito/datos-pago
@@ -15,64 +17,124 @@ module.exports = (pool, verificarToken) => {
      * Requiere token de autenticación
      */
     router.get('/carrito/datos-pago', verificarToken, async (req, res) => {
-        // El carrito viene del frontend via el token/headers
-        // Aquí solo devolvemos la info del usuario desde el token
-        const usuario = req.usuario;
-        
-        return res.json({
-            mensaje: 'Datos del usuario obtenidos correctamente.',
-            data: {
-                usuario: {
-                    id: usuario.id,
-                    nombre: usuario.nombre,
-                    email: usuario.email
-                },
-                items: [],
-                total: 0
-            }
-        });
+        const usuarioId = req.usuario.id;
+
+        try {
+            const resultado = await pool.query(
+                `SELECT * FROM carrito WHERE usuario_id = $1 ORDER BY created_at`,
+                [usuarioId]
+            );
+
+            const rows = resultado.rows;
+
+            const total = rows.reduce((sum, item) => {
+                return sum + (parseFloat(item.precio_unitario) * parseInt(item.cantidad));
+            }, 0);
+
+            return res.json({
+                items: rows,
+                total: parseFloat(total.toFixed(2))
+            });
+
+        } catch (err) {
+            console.error('[GET /carrito/datos-pago]', err);
+            return res.status(500).json({ error: 'Error interno al obtener los datos del carrito.' });
+        }
     });
 
     /**
      * POST /checkout/iniciar
      * Inicia el proceso de pago
-     * - Crea registro de transacción en DB (estado: pendiente)
+     * - Crea registro de transacción en DB (estado: PENDIENTE)
      * - Llama a pagosClient.crearCheckout() para obtener URL de pago
      * Requiere token de autenticación
      */
     router.post('/iniciar', verificarToken, async (req, res) => {
         const usuario = req.usuario;
-        const { items, total, moneda } = req.body;
+        const { items, moneda } = req.body;
 
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ error: 'El carrito está vacío. Agrega productos antes de continuar.' });
         }
 
         try {
-            // Calcular total si no se proporciona
-            const totalCalculado = total || items.reduce((sum, item) => {
+            /* ── 1. Validar stock de cada ítem ── */
+            const sinStock = [];
+            for (const item of items) {
+                const info = await productosClient.verificarStock(item.producto_id);
+                const stockDisponible = info.stock ?? info.disponible ?? 0;
+                if (stockDisponible < item.cantidad) {
+                    sinStock.push({
+                        producto_id: item.producto_id,
+                        nombre: item.nombre,
+                        cantidad_solicitada: item.cantidad,
+                        stock_disponible: stockDisponible
+                    });
+                }
+            }
+
+            if (sinStock.length > 0) {
+                return res.status(409).json({
+                    error: 'Algunos productos no tienen stock suficiente.',
+                    items_sin_stock: sinStock
+                });
+            }
+
+            /* ── 2. Calcular totales ── */
+            const subtotal = items.reduce((sum, item) => {
                 const precio = parseFloat(item.precio_unitario) || 0;
                 const cantidad = parseInt(item.cantidad) || 0;
                 return sum + (precio * cantidad);
             }, 0);
 
+            const envio = subtotal < 500 ? 50 : 0;
+            const totalCalculado = subtotal + envio;
+
             if (totalCalculado <= 0) {
                 return res.status(400).json({ error: 'El total de la compra debe ser mayor a 0.' });
             }
 
-            // Crear transacción en estado pendiente
+/* ── 3. Revisar intentos de pago recientes (max 3 en 10 min) ── */
+            const ahora = new Date();
+            const hace10min = new Date(ahora.getTime() - 10 * 60 * 1000);
+
+            const intentosRecientes = await pool.query(
+                `SELECT COUNT(*)::int AS total FROM transacciones
+                 WHERE  usuario_id  = $1
+                   AND  estado      = 'PENDIENTE'
+                   AND  created_at  > $2`,
+                [usuario.id, hace10min.toISOString()]
+            );
+
+            if (intentosRecientes.rows[0].total >= 3) {
+                return res.status(429).json({
+                    error: 'Demasiados intentos de pago. Espera 10 minutos antes de intentarlo de nuevo.',
+                    retry_after: '10 minutos'
+                });
+            }
+
+            /* ── 4. Guardar transacción (PENDIENTE) ── */
             const transaccionResult = await pool.query(
-                `INSERT INTO transacciones (usuario_id, usuario_email, items, total, moneda, estado)
-                 VALUES ($1, $2, $3, $4, $5, 'pendiente')
-                 RETURNING id, usuario_id, usuario_email, items, total, moneda, estado, created_at`,
-                [usuario.id, usuario.email, JSON.stringify(items), totalCalculado, moneda || 'MXN']
+                `INSERT INTO transacciones (usuario_id, usuario_email, items, total, moneda, estado, currency, ip_address, user_agent, ultimo_intento_pago)
+                 VALUES ($1, $2, $3, $4, $5, 'PENDIENTE', $6, $7, $8, NOW())
+                 RETURNING id, usuario_id, usuario_email, items, total, moneda, estado, currency, ip_address, user_agent, created_at`,
+                [
+                    usuario.id,
+                    usuario.email,
+                    JSON.stringify(items),
+                    Number(totalCalculado.toFixed(2)),
+                    moneda || 'MXN',
+                    moneda || 'COP',
+                    req.ip || req.connection?.remoteAddress || null,
+                    req.headers['user-agent'] || null
+                ]
             );
 
             const transaccion = transaccionResult.rows[0];
 
-            // URLs de redirección después del pago
-            const urlRedirectOk = process.env.URL_PAGO_OK || 'http://localhost:5173/pages/pago.html?status=approved';
-            const urlRedirectError = process.env.URL_PAGO_ERROR || 'http://localhost:5173/pages/pago.html?status=rejected';
+            /* ── 5. Preparar datos para pasarela ── */
+            const urlRedirectOk    = config.urlPagoOk;
+            const urlRedirectError = config.urlPagoError;
 
             const datosCheckout = {
                 usuario: {
@@ -85,25 +147,26 @@ module.exports = (pool, verificarToken) => {
                     cantidad: parseInt(item.cantidad),
                     precio_unitario: parseFloat(item.precio_unitario)
                 })),
+                subtotal: Number(subtotal.toFixed(2)),
+                envio: envio,
                 total: Number(totalCalculado.toFixed(2)),
                 moneda: moneda || 'MXN',
                 url_redirect_ok: urlRedirectOk,
                 url_redirect_error: urlRedirectError
             };
 
-            // Llamar al servicio de pagos
+            /* ── 6. Llamar servicio de pagos ── */
             const respuestaPago = await pagosClient.crearCheckout(datosCheckout);
 
             if (respuestaPago.error) {
-                // Si el servicio de pagos falla, marcar transacción como fallida
                 await pool.query(
-                    `UPDATE transacciones SET estado = 'fallido' WHERE id = $1`,
+                    `UPDATE transacciones SET estado = 'RECHAZADA' WHERE id = $1`,
                     [transaccion.id]
                 );
                 return res.status(503).json({ error: 'El servicio de pagos no está disponible: ' + respuestaPago.error });
             }
 
-            // Actualizar transacción con la referencia externa
+            /* ── 7. Actualizar referencia externa e intentar anterior ── */
             await pool.query(
                 `UPDATE transacciones
                  SET    referencia_pago_externa = $1
@@ -111,10 +174,10 @@ module.exports = (pool, verificarToken) => {
                 [respuestaPago.id || 'N/A', transaccion.id]
             );
 
-            // Devolver la URL de pago (init_point) para que el frontend redirija
+            /* ── 8. Responder con checkout_url ── */
             return res.json({
                 mensaje: 'Checkout iniciado correctamente.',
-                init_point: respuestaPago.init_point,
+                checkout_url: respuestaPago.init_point || respuestaPago.checkout_url,
                 transaction_id: transaccion.id
             });
 

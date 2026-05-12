@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recomendaciones</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f5f5f5; color: #333; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+        h1 { margin-bottom: 20px; color: #1a1a2e; }
+        .productos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+        .producto-card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+        .producto-card h3 { font-size: 1em; }
+        .precio { font-size: 1.1em; font-weight: 700; color: #28a745; }
+        .btn { padding: 7px 14px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-primary { background: #007bff; color: #fff; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-sm { padding: 5px 10px; font-size: 0.8em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⭐ Recomendaciones para ti</h1>
+        <div id="recomendaciones-lista">
+            <p style="text-align:center;padding:40px;">Cargando recomendaciones...</p>
+        </div>
+    </div>
+    <script src="../js/auth.js"></script>
+    <script src="../js/recomendaciones.js"></script>
+    <script>init();</script>
+</body>
+</html>

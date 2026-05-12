@@ -10,7 +10,7 @@ module.exports = (pool, verificarToken) => {
         try {
             const resultado = await pool.query(
                 `SELECT id, usuario_id, usuario_email, items, total, moneda, estado, 
-                        referencia_pago_externa, created_at, updated_at
+                        payment_reference as referencia_pago_externa, created_at, updated_at
                  FROM   transacciones
                  WHERE  usuario_id = $1
                  ORDER  BY created_at DESC`,
@@ -36,7 +36,7 @@ module.exports = (pool, verificarToken) => {
         try {
             const resultado = await pool.query(
                 `SELECT id, usuario_id, usuario_email, items, total, moneda, estado,
-                        referencia_pago_externa, created_at, updated_at
+                        payment_reference as referencia_pago_externa, created_at, updated_at
                  FROM   transacciones
                  WHERE  id = $1 AND usuario_id = $2`,
                 [id, usuarioId]
@@ -60,7 +60,7 @@ module.exports = (pool, verificarToken) => {
         const { estado } = req.body;
         const usuarioId = req.usuario.id;
 
-        const ESTADOS_VALIDOS = ['pendiente', 'pagado', 'cancelado', 'fallido'];
+        const ESTADOS_VALIDOS = ['PENDIENTE', 'APROBADA', 'RECHAZADA'];
 
         if (!estado || !ESTADOS_VALIDOS.includes(estado)) {
             return res.status(400).json({
@@ -84,7 +84,7 @@ module.exports = (pool, verificarToken) => {
                         updated_at = NOW()
                  WHERE  id = $2
                  RETURNING id, usuario_id, usuario_email, items, total, moneda, estado,
-                           referencia_pago_externa, created_at, updated_at`,
+                           payment_reference as referencia_pago_externa, created_at, updated_at`,
                 [estado, id]
             );
 

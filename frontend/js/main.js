@@ -1,5 +1,5 @@
 
-const API_URL = 'http://localhost:3000';
+//localhost:3000';
 
 (function() {
     const params = new URLSearchParams(window.location.search);

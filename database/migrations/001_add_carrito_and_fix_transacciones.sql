@@ -55,7 +55,7 @@ ALTER TABLE transacciones
     ADD COLUMN IF NOT EXISTS items                    JSONB,
     ADD COLUMN IF NOT EXISTS usuario_email            VARCHAR(255),
     ADD COLUMN IF NOT EXISTS total                    NUMERIC(12,2),
-    ADD COLUMN IF NOT EXISTS moneda                   VARCHAR(3)    DEFAULT 'MXN',
+    ADD COLUMN IF NOT EXISTS moneda                   VARCHAR(3)    DEFAULT 'COP',
     ADD COLUMN IF NOT EXISTS referencia_pago_externa   VARCHAR(255);
 
 -- =============================================================================

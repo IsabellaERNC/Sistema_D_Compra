@@ -188,6 +188,19 @@ async function procesarAuthCallback() {
         console.log('✅ Token recibido y guardado desde callback');
 
         await fusionarCarritoGuest(token);
+
+        // Handle redirect after login
+        const redirectAfterLogin = localStorage.getItem('redirect_after_login');
+        if (redirectAfterLogin === 'checkout') {
+            localStorage.removeItem('redirect_after_login');
+            window.location.href = 'carrito.html';
+            return;
+        }
+    }
+
+    // Restore pending checkout cart if exists
+    if (typeof checkPendingCheckout === 'function') {
+        checkPendingCheckout();
     }
 }
 

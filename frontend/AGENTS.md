@@ -1,49 +1,81 @@
-# FRONTEND KNOWLEDGE BASE
+# Frontend — Vite SPA
 
-## OVERVIEW
-Frontend HTML/CSS/JS vanilla servido con Vite, organizado como sitio multip�gina con estado en `localStorage`.
+> Plain JavaScript SPA with no framework. Vite dev server, localStorage cart for guests, backend API sync for logged-in users.
 
-## STRUCTURE
-```text
-frontend/
-+-- css/
-�   +-- styles.css
-+-- js/
-�   +-- auth.js
-�   +-- carrito.js
-�   +-- main.js
-+-- pages/
-�   +-- carrito.html
-�   +-- confirmacion.html
-�   +-- login.html
-�   +-- pago.html
-+-- index.html
-+-- package.json
+## Quick Orientation
+
+| What | Where | Notes |
+|------|-------|-------|
+| Entry | `index.html` | Loads `js/auth.js` + `js/main.js` |
+| Styles | `css/styles.css` | Single CSS file, no preprocessors |
+| Pages | `pages/` | 4 HTML pages: carrito, confirmacion, login, pago |
+| Scripts | `js/` | 3 JS files: auth.js, carrito.js, main.js |
+
+## Page Flow
+
+```
+index.html (product catalog + mini cart)
+  ├── pages/login.html (login/register form)
+  ├── pages/carrito.html (full cart view, quantity controls)
+  ├── pages/pago.html (payment redirect + status)
+  └── pages/confirmacion.html (payment success/retry)
 ```
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|---|---|---|
-| Home + cat�logo | `index.html`, `js/main.js` | render de productos y contador |
-| Auth modal/nav | `js/auth.js` | login/register/logout y dropdown perfil |
-| Carrito | `pages/carrito.html`, `js/carrito.js` | cantidades, vaciar, iniciar pago |
-| Pago | `pages/pago.html` | POST autenticado con Bearer token |
-| Confirmaci�n | `pages/confirmacion.html` | limpia estado final |
-| Estilos globales | `css/styles.css` | shared classes, modal, nav, botones |
+## Authentication (`js/auth.js`)
 
-## CONVENTIONS
-- Scripts cl�sicos con `<script src>`; no imports ES modules.
-- Handlers inline frecuentes: `onclick="..."` en HTML y HTML generado desde JS.
-- Estado persistido en `localStorage`: `token`, `usuario`, `stock`, `carrito_guest`, `carrito_<id>`, `ultimoTotal`.
-- Texto visible y mensajes en espa�ol.
-- HTML generado con template strings; stock y carrito se recalculan/renderizan manualmente.
+- **No framework auth** — plain localStorage token management
+- `isLoggedIn()` → checks `localStorage.getItem('token')`
+- `getToken()` → returns JWT string or null
+- `getUsuario()` → parses `localStorage.getItem('usuario')` JSON
+- `logout()` → clears token + usuario from localStorage
+- `renderAuthNav()` → injects login/logout UI into pages
+- `getCarritoKey()` → returns `carrito_{userId}` if logged in, `carrito_guest` if not
+- `handleAuthCallback()` / `procesarAuthCallback()` → processes auth redirect, handles user fusion
 
-## ANTI-PATTERNS
-- No asumir SPA/router cliente: la navegaci�n real ocurre entre `index.html` y `pages/*.html`.
-- No introducir dependencias de framework sin revisar todo el flujo; el c�digo actual depende de globals compartidos entre p�ginas.
-- No documentar tests visuales o E2E: no existen.
+### Token Flow
+1. User submits login form on `pages/login.html`
+2. Frontend calls **auth service directly** (not through backend)
+3. JWT stored in `localStorage.token`
+4. All backend API calls include `Authorization: Bearer <token>` header
+5. `verificarToken` validates token on backend side
 
-## NOTES
-- `auth.js` le�do desde herramientas aparece truncado/corrupto en la l�nea de `API_URL`; validar el archivo completo antes de cambios.
-- `package.json` solo tiene `dev`, `build`, `preview`.
-- La landing mezcla modal auth embebido y redirect fallback a `pages/login.html`.
+## Cart Logic (`js/carrito.js`)
+
+### Dual Storage Model
+- **Guest**: Cart stored in `localStorage.carrito_guest` (array of `{producto_id, nombre, precio, cantidad}`)
+- **Logged in**: Cart synced to backend via `/api/carrito` — localStorage only for display/optimistic updates
+
+### Sync Behavior
+- `addToCart()` → if logged in: `POST /api/carrito` (upsert) + update localStorage; if guest: localStorage only
+- `updateQuantity()` → if logged in: `PATCH /api/carrito/:id`; if guest: localStorage only
+- `deleteItem()` → if logged in: `DELETE /api/carrito/:id`; if guest: localStorage only
+- `vaciarCarrito()` → if logged in: `DELETE /api/carrito` (all items); if guest: clear localStorage
+- `procesarPago()` → if logged in: full backend checkout flow; if guest: redirect to login first
+
+### Guest → User Fusion (`procesarAuthCallback`)
+When guest logs in, frontend sends guest cart to `POST /api/carrito/fusionar` which merges quantities.
+
+## Product Display (`js/main.js`)
+
+- Fetches products from `PRODUCTOS_SERVICE_URL` via backend proxy or direct
+- Renders product cards with "Add to cart" buttons
+- On add: calls `addToCart()` from carrito.js, updates mini-cart display
+
+## Guardrails ⚠️
+
+- **No framework** — all DOM manipulation is vanilla JS, no React/Vue/Angular
+- **No module bundling** — scripts loaded via `<script>` tags in HTML, not ES modules
+- **localStorage dependency** — cart state relies on localStorage; don't replace with sessionStorage
+- **Auth redirect** — auth service returns redirect URLs; don't change callback flow without updating auth.js
+- **Cart key format** — `carrito_{userId}` or `carrito_guest` — don't create new key formats
+- **Page navigation** — plain `<a href>` links between pages, no SPA router
+- **CSS** — single file `css/styles.css`, no CSS-in-JS, no Tailwind, no preprocessors
+
+## What NOT To Do
+
+- ❌ Don't add a JS framework (React/Vue/etc) — project uses vanilla JS throughout
+- ❌ Don't use ES module `import`/`export` in frontend JS — loaded via script tags
+- ❌ Don't bypass the cart sync — always call backend API when logged in
+- ❌ Don't store sensitive data in localStorage beyond what auth.js already stores (token + user JSON)
+- ❌ Don't create new page-level HTML files without updating index.html navigation links
+- ❌ Don't modify `getCarritoKey()` logic — it has a specific guest/user distinction
