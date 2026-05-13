@@ -58,9 +58,8 @@ function verificarToken(req, res, next) {
             next();
         })
         .catch(err => {
-            return res.status(403).json({ error: 'Token invÃ¡lido o expirado.' });
-});
-const checkoutRouter = require('./routes/checkout');
+            return res.status(403).json({ error: 'Token inválido o expirado.' });
+        });
 }
 
 
@@ -122,13 +121,13 @@ pedidosNamespace.on('connection', (socket) => {
 
 
 const transaccionesRouter = require('./routes/transacciones');
-app.use('/api/transacciones', transaccionesRouter(pool, verificarToken));
+app.use('/api/transacciones', transaccionesRouter(pool, verificarToken, io));
 
 const carritoRouter = require('./routes/carrito');
-app.use('/api/carrito', carritoRouter(pool, verificarToken, productosClient));
+app.use('/api/carrito', carritoRouter(pool, verificarToken, productosClient, io));
 
 const direccionesRouter = require('./routes/direcciones');
-app.use('/api/direcciones', direccionesRouter(pool, verificarToken));
+app.use('/api/direcciones', direccionesRouter(pool, verificarToken, io));
 
 const pedidosRouter = require('./routes/pedidos');
 app.use('/api/pedidos', pedidosRouter(pool, verificarToken, io));
@@ -164,9 +163,23 @@ app.get('/api/productos', async (req, res) => {
 });
 const checkoutRouter = require('./routes/checkout');
 const webhookRouter = require('./routes/webhook');
-app.use('/api/checkout', checkoutRouter(pool, verificarToken));
-app.use('/api/webhook', webhookRouter(pool));
+app.use('/api/checkout', checkoutRouter(pool, verificarToken, io));
+app.use('/api/webhook', webhookRouter(pool, io));
 
+
+// ── T19 CART-14: Limpiar carritos inactivos (>30 días) cada 24 horas ──
+setInterval(async () => {
+    try {
+        const result = await pool.query(
+            `DELETE FROM carrito WHERE ultima_actividad < NOW() - INTERVAL '30 days'`
+        );
+        if (result.rowCount > 0) {
+            console.log(`[TTL] ${result.rowCount} carrito(s) inactivo(s) eliminado(s)`);
+        }
+    } catch (err) {
+        console.error('[TTL] Error limpiando carritos inactivos:', err.message);
+    }
+}, 24 * 60 * 60 * 1000);
 
 server.listen(PORT, () => {
     console.log(`ðŸš€ Servidor corriendo en http://localhost:${PORT}`);
@@ -192,6 +205,7 @@ server.listen(PORT, () => {
     console.log(`   GET    /api/pedidos/:id`);
     console.log(`   PATCH  /api/pedidos/:id/estado`);
     console.log(`   POST   /api/pedidos/:id/cancelar`);
+    console.log(`   GET    /api/pedidos/:id/factura`);
     console.log(`   GET    /api/vendedor/pedidos`);
     console.log(`   PATCH  /api/vendedor/pedidos/:id/estado`);
     console.log(`   POST   /api/checkout/iniciar`);

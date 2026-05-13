@@ -36,7 +36,7 @@ npm install
 
 ```bash
 # Desde la raíz del proyecto
-cp .env.example .env
+cp .env.example backend/.env
 ```
 
 Editar `.env` con los valores correctos para tu entorno:
@@ -51,20 +51,29 @@ Editar `.env` con los valores correctos para tu entorno:
 ### Crear la base de datos
 
 ```bash
-createdb -U postgres sistema_compras
+createdb -U postgres sistema_d_compra
 ```
 
-### Ejecutar la migración
+### Ejecutar el schema completo
 
 ```bash
-psql -U postgres -d sistema_compras -f database/migrations/001_add_carrito_and_fix_transacciones.sql
+psql -U postgres -d sistema_d_compra -f database/schema_completo.sql
 ```
 
-Esta migración crea:
+El archivo `database/schema_completo.sql` reemplaza todas las migraciones individuales (000–009). Crea las 6 tablas con sus columnas finales limpias, índices y triggers. Usa `IF NOT EXISTS` — es seguro re-ejecutarlo.
 
-- Tabla `carrito` con columnas: id, usuario_id, producto_id, producto_nombre, precio_unitario, cantidad, created_at, updated_at
-- Columnas adicionales en `transacciones`: items (JSONB), usuario_email, payment_url
-- Trigger automático para actualizar `updated_at` en cada modificación del carrito
+**Tablas creadas:**
+
+| Tabla | Propósito |
+|-------|-----------|
+| `transacciones` | Pagos y transacciones de checkout |
+| `carrito` | Items en el carrito de compras |
+| `direcciones` | Direcciones de envío de usuarios |
+| `pedidos` | Pedidos tras confirmación de pago |
+| `log_estados` | Auditoría de cambios de estado en pedidos |
+| `eventos_pendientes` | Cola de reintentos para eventos fallidos |
+
+> **Nota para despliegues existentes:** Si ya tienes las migraciones individuales aplicadas, no necesitas ejecutar este schema. Está pensado para despliegues nuevos y para tener una referencia única del esquema completo.
 
 ## Paso 5: Iniciar los Servicios Externos
 
@@ -75,6 +84,7 @@ El backend depende de tres servicios externos que deben estar corriendo:
 | Auth | 4000 | _(repositorio separado)_ |
 | Productos | 4001 | _(repositorio separado)_ |
 | Pagos | 4002 | _(repositorio separado)_ |
+| Notificaciones-Pedidos | 4003 | _(repositorio separado)_ |
 
 Sin estos servicios activos, el backend no podrá validar tokens, consultar productos ni procesar pagos.
 
@@ -146,35 +156,56 @@ El backend ya tiene CORS habilitado para todas las origins. Si ves errores de CO
 ```
 Sistema_D_Compra/
 ├── backend/
-│   ├── server.js              # Entry point Express
+│   ├── server.js              # Entry point Express + WebSocket
 │   ├── config.js              # Variables de entorno
+│   ├── package.json           # Dependencias
 │   ├── routes/
 │   │   ├── carrito.js         # CRUD del carrito
-│   │   ├── checkout.js        # Inicio de pago
+│   │   ├── checkout.js        # Inicio de pago + datos-pago
 │   │   ├── transacciones.js   # Historial de transacciones
-│   │   └── webhook.js         # Confirmación de pago
-│   └── services/
-│       ├── authClient.js      # Cliente HTTP auth
-│       ├── productosClient.js # Cliente HTTP productos
-│       └── pagosClient.js     # Cliente HTTP pagos
+│   │   ├── webhook.js         # Confirmación de pago
+│   │   ├── direcciones.js     # Direcciones de envío
+│   │   ├── pedidos.js         # Pedidos + PDF invoice
+│   │   ├── vendedor.js        # Panel de vendedor + máquina estados
+│   │   ├── vendedorMiddleware.js  # Middleware de rol vendedor
+│   │   ├── eventos.js         # Reintentos de eventos fallidos
+│   │   └── productos.js       # Proxy de catálogo
+│   ├── services/
+│   │   ├── authClient.js      # Cliente HTTP servicio Auth
+│   │   ├── productosClient.js # Cliente HTTP servicio Productos
+│   │   ├── pagosClient.js     # Cliente HTTP servicio Pagos (MercadoPago)
+│   │   └── notificacionesPedidosClient.js  # Cliente HTTP servicio Notificaciones
+│   └── node_modules/          # (generado por npm install)
 ├── frontend/
 │   ├── index.html             # Entry point Vite
+│   ├── package.json           # Dependencias Vite
+│   ├── css/
+│   │   └── styles.css         # Estilos globales
 │   ├── pages/
-│   │   ├── login.html         # Página de login
-│   │   ├── carrito.html       # Página del carrito
-│   │   ├── pago.html          # Página de pago
-│   │   └── confirmacion.html  # Confirmación de pago
+│   │   ├── login.html         # Login / registro
+│   │   ├── carrito.html       # Carrito de compras
+│   │   ├── pago.html          # Pago y status
+│   │   ├── confirmacion.html  # Confirmación post-pago
+│   │   ├── pedidos.html       # Tracking de pedidos + WebSocket
+│   │   ├── vendedor.html      # Panel de vendedor
+│   │   └── recomendaciones.html # Recomendaciones de productos
 │   └── js/
-│       ├── auth.js            # Lógica de autenticación
-│       ├── main.js            # Lógica principal
-│       └── carrito.js         # Lógica del carrito
+│       ├── auth.js            # Autenticación (login/logout/token)
+│       ├── main.js            # Lógica principal + render catálogo
+│       ├── carrito.js         # Carrito (localStorage + API sync)
+│       ├── checkout.js        # Checkout flow
+│       ├── pedidos.js         # Tracking + WebSocket
+│       ├── recomendaciones.js # Recomendaciones
+│       └── vendedor.js        # Panel vendedor
 ├── database/
-│   └── migrations/
-│       └── 001_add_carrito_and_fix_transacciones.sql
+│   └── schema_completo.sql    # Schema único (6 tablas + índices + triggers)
 ├── docs/
 │   ├── setup.md               # Esta guía
 │   ├── arquitectura.md        # Diagrama de arquitectura
-│   └── api-externa.md         # Contratos de servicios externos
-├── .env.example               # Plantilla de variables
+│   ├── api-externa.md         # Contratos de servicios externos
+│   └── api-interna.md         # Endpoints del backend
+├── .env.example               # Plantilla de variables de entorno
+├── AGENTS.md                  # Guía del projecto para IA
+├── .gitignore                 # Archivos ignorados por git
 └── README.md                  # Documentación principal
 ```

@@ -24,11 +24,12 @@ El backend actúa como consumidor de tres microservicios externos. Delega autent
 
 | Servicio | Puerto | Responsabilidad |
 |----------|--------|-----------------|
-| Backend API | 3000 | Carrito CRUD, checkout, transacciones, webhook |
-| Frontend | 5173 | SPA con Vite, páginas de login, carrito, pago, confirmación |
+| Backend API | 3000 | Carrito CRUD, checkout, transacciones, direcciones, pedidos, webhook, eventos, productos proxy |
+| Frontend | 5173 | SPA con Vite: login, carrito, pago, confirmación, pedidos, vendedor, recomendaciones |
 | Auth (externo) | 4000 | Registro, login, validación JWT |
 | Productos (externo) | 4001 | Catálogo de productos |
 | Pagos (externo) | 4002 | Integración con MercadoPago |
+| Notificaciones (externo) | 4003 | Notificaciones de pedidos |
 
 ## Inicio Rápido
 
@@ -55,7 +56,7 @@ cp .env.example .env
 
 # 4. Crear base de datos y ejecutar migración
 createdb -U postgres sistema_compras
-psql -U postgres -d sistema_compras -f database/migrations/001_add_carrito_and_fix_transacciones.sql
+psql -U postgres -d sistema_compras -f database/schema_completo.sql
 
 # 5. Iniciar servidores (en terminales separadas)
 cd backend && npm run dev    # Terminal 1: Express en puerto 3000
@@ -73,6 +74,11 @@ Ver la guía completa en [docs/setup.md](docs/setup.md).
 | `PRODUCTOS_SERVICE_URL` | URL del servicio de productos | `http://localhost:4001` |
 | `PAGOS_SERVICE_URL` | URL del servicio de pagos | `http://localhost:4002` |
 | `PAGOS_WEBHOOK_SECRET` | Secreto HMAC para verificación de webhook | _(vacío)_ |
+| `NOTIFICACIONES_SERVICE_URL` | URL del servicio de notificaciones | `http://localhost:4003` |
+| `JWT_SECRET` | Secreto para firmar JWTs en DEV_MODE | _(vacío)_ |
+| `DEV_MODE` | Modo desarrollo (true=JWT local, false=auth externo) | `true` |
+| `URL_PAGO_OK` | Redirección post-pago exitoso | `http://localhost:5173/pages/confirmacion.html?status=ok` |
+| `URL_PAGO_ERROR` | Redirección post-pago fallido | `http://localhost:5173/pages/confirmacion.html?status=error` |
 | `DB_HOST` | Host de PostgreSQL | `localhost` |
 | `DB_PORT` | Puerto de PostgreSQL | `5432` |
 | `DB_USER` | Usuario de PostgreSQL | `postgres` |

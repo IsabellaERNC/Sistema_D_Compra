@@ -1,35 +1,13 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistema de Compras</title>
-    <link rel="stylesheet" href="css/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Carrito</title>
+  <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-
-    <header>
-        <div class="nav-izq">
-            <h1>🛒 Sistema de Compras</h1>
-        </div>
-
-        <div class="nav-der">
-            <a href="pages/carrito.html" class="nav-link">
-                🛍️ Ver Carrito (<span id="contador">0</span>)
-            </a>
-
-            <div id="auth-nav-btn"></div>
-        </div>
-    </header>
-
-    
-
-    <main>
-        <h2>Productos disponibles</h2>
-        <div id="lista-productos"></div>
-    </main>
-
-    <script src="js/auth.js"></script>
-    <script src="js/main.js"></script>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>

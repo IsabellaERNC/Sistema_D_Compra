@@ -8,7 +8,7 @@ const config          = require('../config');
 const pagosClient     = require('../services/pagosClient');
 const productosClient = require('../services/productosClient');
 
-module.exports = (pool, verificarToken) => {
+module.exports = (pool, verificarToken, io) => {
     const router = express.Router();
 
     /**
@@ -49,12 +49,25 @@ module.exports = (pool, verificarToken) => {
      * - Llama a pagosClient.crearCheckout() para obtener URL de pago
      * Requiere token de autenticación
      */
-    router.post('/iniciar', verificarToken, async (req, res) => {
+router.post('/iniciar', verificarToken, async (req, res) => {
         const usuario = req.usuario;
-        const { items, moneda } = req.body;
+        const { items, moneda, direccion_envio_id } = req.body;
 
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ error: 'El carrito está vacío. Agrega productos antes de continuar.' });
+        }
+
+        if (!direccion_envio_id) {
+            return res.status(400).json({ error: 'Debes seleccionar una dirección de envío.' });
+        }
+
+        /* ── 0.5. Validar que la dirección pertenezca al usuario ── */
+        const dirResult = await pool.query(
+            `SELECT id FROM direcciones WHERE id = $1 AND usuario_id = $2`,
+            [direccion_envio_id, usuario.id]
+        );
+        if (dirResult.rows.length === 0) {
+            return res.status(400).json({ error: 'La dirección de envío no es válida.' });
         }
 
         try {
@@ -90,11 +103,22 @@ module.exports = (pool, verificarToken) => {
             const envio = subtotal < 500 ? 50 : 0;
             const totalCalculado = subtotal + envio;
 
-            if (totalCalculado <= 0) {
+if (totalCalculado <= 0) {
                 return res.status(400).json({ error: 'El total de la compra debe ser mayor a 0.' });
             }
 
-/* ── 3. Revisar intentos de pago recientes (max 3 en 10 min) ── */
+            /* ── 3. Validar dirección de envío ── */
+            if (direccion_envio_id) {
+                const dirResult = await pool.query(
+                    `SELECT id FROM direcciones WHERE id = $1 AND usuario_id = $2`,
+                    [direccion_envio_id, usuario.id]
+                );
+                if (dirResult.rows.length === 0) {
+                    return res.status(400).json({ error: 'La dirección de envío no existe o no te pertenece.' });
+                }
+            }
+
+            /* ── 4. Revisar intentos de pago recientes (max 3 en 10 min) ── */
             const ahora = new Date();
             const hace10min = new Date(ahora.getTime() - 10 * 60 * 1000);
 
@@ -115,18 +139,18 @@ module.exports = (pool, verificarToken) => {
 
             /* ── 4. Guardar transacción (PENDIENTE) ── */
             const transaccionResult = await pool.query(
-                `INSERT INTO transacciones (usuario_id, usuario_email, items, total, moneda, estado, currency, ip_address, user_agent, ultimo_intento_pago)
-                 VALUES ($1, $2, $3, $4, $5, 'PENDIENTE', $6, $7, $8, NOW())
-                 RETURNING id, usuario_id, usuario_email, items, total, moneda, estado, currency, ip_address, user_agent, created_at`,
+                `INSERT INTO transacciones (usuario_id, usuario_email, items, total, moneda, estado, ip_address, user_agent, ultimo_intento_pago, direccion_envio_id)
+                 VALUES ($1, $2, $3, $4, $5, 'PENDIENTE', $6, $7, NOW(), $8)
+                 RETURNING id, usuario_id, usuario_email, items, total, moneda, estado, ip_address, user_agent, created_at`,
                 [
                     usuario.id,
                     usuario.email,
                     JSON.stringify(items),
                     Number(totalCalculado.toFixed(2)),
-                    moneda || 'MXN',
                     moneda || 'COP',
                     req.ip || req.connection?.remoteAddress || null,
-                    req.headers['user-agent'] || null
+                    req.headers['user-agent'] || null,
+                    direccion_envio_id
                 ]
             );
 
@@ -174,10 +198,17 @@ module.exports = (pool, verificarToken) => {
                 [respuestaPago.id || 'N/A', transaccion.id]
             );
 
-            /* ── 8. Responder con checkout_url ── */
+            /* ── 8. Emitir evento WebSocket ── */
+            io.of('/pedidos').to(`usuario_${usuario.id}`).emit('transaccion:creada', {
+                transaccion_id: transaccion.id,
+                total: transaccion.total,
+                estado: transaccion.estado
+            });
+
+            /* ── 9. Responder con checkout_url ── */
             return res.json({
                 mensaje: 'Checkout iniciado correctamente.',
-                checkout_url: respuestaPago.init_point || respuestaPago.checkout_url,
+                checkout_url: `${respuestaPago.init_point || respuestaPago.checkout_url}?tid=${transaccion.id}`,
                 transaction_id: transaccion.id
             });
 

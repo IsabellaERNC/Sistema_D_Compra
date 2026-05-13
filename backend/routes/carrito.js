@@ -1,6 +1,6 @@
 const express = require('express');
 
-module.exports = (pool, verificarToken, productosClient) => {
+module.exports = (pool, verificarToken, productosClient, io) => {
     const router = express.Router();
 
     router.get('/', verificarToken, async (req, res) => {
@@ -122,6 +122,8 @@ module.exports = (pool, verificarToken, productosClient) => {
                 [usuarioId]
             );
 
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('carrito:actualizado', { carrito: carrito.rows });
+
             return res.status(201).json({
                 mensaje: 'Producto agregado al carrito.',
                 item:    resultado.rows[0],
@@ -184,6 +186,8 @@ module.exports = (pool, verificarToken, productosClient) => {
                     [usuarioId]
                 );
 
+                io.of('/pedidos').to(`usuario_${usuarioId}`).emit('carrito:actualizado', { carrito: carrito.rows });
+
                 return res.json({
                     mensaje: 'Producto eliminado del carrito.',
                     item:    resultado.rows[0],
@@ -218,6 +222,8 @@ module.exports = (pool, verificarToken, productosClient) => {
                  ORDER  BY created_at`,
                 [usuarioId]
             );
+
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('carrito:actualizado', { carrito: carrito.rows });
 
             return res.json({
                 mensaje: 'Cantidad actualizada.',
@@ -256,6 +262,8 @@ module.exports = (pool, verificarToken, productosClient) => {
                  ORDER  BY created_at`,
                 [usuarioId]
             );
+
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('carrito:actualizado', { carrito: carrito.rows });
 
             return res.json({
                 mensaje: 'Producto eliminado del carrito.',

@@ -8,7 +8,7 @@
 |------|-------|-------|
 | Backend entry | `backend/server.js` | Express on port 3000 |
 | Frontend entry | `frontend/index.html` | Vite dev server, loads `js/auth.js` + `js/main.js` |
-| DB migration | `database/migrations/001_add_carrito_and_fix_transacciones.sql` | Carrito table + transacciones columns |
+| DB schema | `database/schema_completo.sql` | Complete database schema (replaces migrations 000-009) |
 | Config | `backend/config.js` | All env vars in one place |
 | Routes | `backend/routes/*.js` | Factory pattern: `(pool, verificarToken) => router` |
 | External clients | `backend/services/*.js` | HTTP wrappers: auth, productos, pagos |
@@ -46,7 +46,7 @@ npm install
 npm run dev          # Vite dev server
 
 # Database — run migration manually
-psql -U postgres -d sistema_d_compra -f database/migrations/001_add_carrito_and_fix_transacciones.sql
+psql -U postgres -d sistema_d_compra -f database/schema_completo.sql
 ```
 
 ### Required Environment Variables
@@ -119,7 +119,7 @@ See `backend/config.js` for the full list. Key vars:
 |------|-------|-------|
 | Backend entry | `backend/server.js` | Express on port 3000 |
 | Frontend entry | `frontend/index.html` | Vite dev server, loads `js/auth.js` + `js/main.js` |
-| DB migration | `database/migrations/001_add_carrito_and_fix_transacciones.sql` | Carrito table + transacciones columns |
+| DB schema | `database/schema_completo.sql` | Complete database schema (replaces migrations 000-009) |
 | Config | `backend/config.js` | All env vars in one place |
 | Routes | `backend/routes/*.js` | Factory pattern: `(pool, verificarToken) => router` |
 | External clients | `backend/services/*.js` | HTTP wrappers: auth, productos, pagos |
@@ -157,7 +157,7 @@ npm install
 npm run dev          # Vite dev server
 
 # Database — run migration manually
-psql -U postgres -d sistema_d_compra -f database/migrations/001_add_carrito_and_fix_transacciones.sql
+psql -U postgres -d sistema_d_compra -f database/schema_completo.sql
 ```
 
 ### Required Environment Variables

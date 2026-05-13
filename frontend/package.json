@@ -13,5 +13,12 @@
   "license": "ISC",
   "devDependencies": {
     "vite": "^8.0.11"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^6.0.6",
+    "pinia": "^3.0.4",
+    "socket.io-client": "^4.8.3",
+    "vue": "^3.5.34",
+    "vue-router": "^4.6.4"
   }
 }

@@ -1,6 +1,6 @@
 const express = require('express');
 
-module.exports = (pool, verificarToken) => {
+module.exports = (pool, verificarToken, io) => {
     const router = express.Router();
 
     router.get('/', verificarToken, async (req, res) => {
@@ -56,6 +56,11 @@ module.exports = (pool, verificarToken) => {
                  RETURNING *`,
                 [usuarioId, alias, calle, ciudad, departamento, codigo_postal || '', esPredeterminada]
             );
+
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('direcciones:actualizadas', {
+                accion: 'creada',
+                direccion: resultado.rows[0]
+            });
 
             return res.status(201).json({
                 mensaje: 'Dirección creada exitosamente.',
@@ -115,6 +120,11 @@ module.exports = (pool, verificarToken) => {
                 ]
             );
 
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('direcciones:actualizadas', {
+                accion: 'actualizada',
+                direccion: resultado.rows[0]
+            });
+
             return res.json({
                 mensaje: 'Dirección actualizada.',
                 direccion: resultado.rows[0]
@@ -155,6 +165,11 @@ module.exports = (pool, verificarToken) => {
                 [direccionId, usuarioId]
             );
 
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('direcciones:actualizadas', {
+                accion: 'eliminada',
+                direccion_id: direccionId
+            });
+
             return res.json({ mensaje: 'Dirección eliminada exitosamente.' });
 
         } catch (err) {
@@ -190,6 +205,11 @@ module.exports = (pool, verificarToken) => {
                  RETURNING *`,
                 [direccionId, usuarioId]
             );
+
+            io.of('/pedidos').to(`usuario_${usuarioId}`).emit('direcciones:actualizadas', {
+                accion: 'predeterminada',
+                direccion: resultado.rows[0]
+            });
 
             return res.json({
                 mensaje: 'Dirección establecida como predeterminada.',

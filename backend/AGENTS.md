@@ -142,7 +142,7 @@ Complete the shopping cart microservice plan (carrito-microservicio) with 13 imp
 - backend/routes/carrito.js: Cart API implementation
 - backend/routes/webhook.js: Cart clear on payment
 - frontend/js/main.js, auth.js, carrito.js: Frontend sync and fusion
-- database/migrations/001_add_carrito_and_fix_transacciones.sql: DB schema
+- database/schema_completo.sql: Complete DB schema (replaces migrations 000-009)
 
 ## 1. User Requests (As-Is)
 - "somos un carrito de compras con micro servicios" - We are a shopping cart with microservices

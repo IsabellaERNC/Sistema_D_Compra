@@ -9,7 +9,7 @@ const pagosClient = require('../services/pagosClient');
 const productosClient = require('../services/productosClient');
 const notificacionesPedidosClient = require('../services/notificacionesPedidosClient');
 
-module.exports = (pool) => {
+module.exports = (pool, io) => {
 
     /**
      * POST /pago-confirmado
@@ -75,7 +75,7 @@ module.exports = (pool) => {
                         referencia_pago_externa = COALESCE($2, referencia_pago_externa),
                         updated_at = NOW()
                  WHERE  id = $3
-                 RETURNING id, usuario_id, usuario_email, items, total, moneda, estado, referencia_pago_externa, created_at, updated_at`,
+                 RETURNING id, usuario_id, usuario_email, items, total, moneda, estado, referencia_pago_externa, direccion_envio_id, created_at, updated_at`,
                 [estadoDB, referencia_externa || null, transaccion_id]
             );
 
@@ -89,18 +89,18 @@ module.exports = (pool) => {
             if (estadoDB === 'APROBADA') {
                 await pool.query('DELETE FROM carrito WHERE usuario_id = $1', [transaccion.usuario_id]);
 
-                const pedidoResult = await pool.query(
-                    `INSERT INTO pedidos (usuario_id, estado, items, monto_total, transaccion_id)
-                     VALUES ($1, 'Pendiente', $2, $3, $4)
-                     RETURNING id`,
-                    [transaccion.usuario_id, transaccion.items, transaccion.total, transaccion.id]
-                );
-                const pedidoId = pedidoResult.rows[0].id;
+        let items = transaccion.items;
+        if (typeof items === 'string') {
+            try { items = JSON.parse(items); } catch (e) { items = []; }
+        }
 
-                /* ── Notificar servicios externos (fallos aislados, no rollback) ── */
-                const items = typeof transaccion.items === 'string'
-                    ? JSON.parse(transaccion.items)
-                    : transaccion.items;
+        const pedidoResult = await pool.query(
+            `INSERT INTO pedidos (usuario_id, estado, items, monto_total, transaccion_id, direccion_envio_id)
+             VALUES ($1, 'Pendiente', $2, $3, $4, $5)
+             RETURNING id`,
+            [transaccion.usuario_id, JSON.stringify(items), transaccion.total, transaccion.id, transaccion.direccion_envio_id]
+        );
+        const pedidoId = pedidoResult.rows[0].id;
 
                 if (Array.isArray(items)) {
                     for (const item of items) {
@@ -143,6 +143,15 @@ module.exports = (pool) => {
                         })]
                     );
                 }
+            }
+
+            const usuarioRoom = `usuario_${transaccion.usuario_id}`;
+            io.of('/pedidos').to(usuarioRoom).emit('transaccion:actualizada', {
+                transaccion: { id: transaccion.id, estado: transaccion.estado, total: transaccion.total }
+            });
+
+            if (estadoDB === 'APROBADA') {
+                io.of('/pedidos').to(usuarioRoom).emit('carrito:limpiado', { mensaje: 'Carrito limpiado después de pago exitoso' });
             }
 
             return res.json({
