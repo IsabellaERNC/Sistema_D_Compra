@@ -5,13 +5,13 @@ const pagosClient = require('../services/pagosClient');
 module.exports = (pool, verificarToken, io) => {
     const router = express.Router();
 
-    // Mapa de transiciones de estado válidas
+    // Mapa de transiciones de estado válidas (UPPERCASE)
     const TRANSICIONES_VALIDAS = {
-        'Pendiente':   ['Procesando', 'Cancelado'],
-        'Procesando':  ['Enviado', 'Cancelado'],
-        'Enviado':     ['Entregado'],
-        'Entregado':   [],
-        'Cancelado':   []
+        'PENDIENTE':   ['PROCESANDO', 'CANCELADO'],
+        'PROCESANDO':  ['ENVIADO', 'CANCELADO'],
+        'ENVIADO':     ['ENTREGADO'],
+        'ENTREGADO':   [],
+        'CANCELADO':   []
     };
 
     /**

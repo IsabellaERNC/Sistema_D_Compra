@@ -4,24 +4,24 @@
 -- Archivo único que reemplaza todas las migraciones individuales (000–009).
 -- Incluye el esquema final limpio de todas las tablas, índices y triggers.
 --
--- Columnas EXCLUIDAS deliberadamente de transacciones (redundantes/muertas):
---   payment_reference     → redundante con referencia_pago_externa
---   currency              → redundante con moneda
---   intentos_pago         → columna muerta, sin uso en el código
---   intentos_cancelacion  → columna muerta, sin uso en el código
---
--- Columnas INCLUIDAS en CREATE TABLE (built-in, no requieren ALTER):
---   carrito.ultima_actividad        → migración 007 incorporada
---   transacciones.ip_address        → migración 005 incorporada
---   transacciones.user_agent        → migración 005 incorporada
---   transacciones.ultimo_intento_pago → migración 008 incorporada (solo columna útil)
+-- CORRECCIONES APLICADAS (16 puntos):
+--   1. CHECK constraint en transacciones.estado
+--   2. Trigger updated_at en transacciones
+--   3. FK pedidos → transacciones
+--   4. UNIQUE transaccion_id en pedidos
+--   5. UNIQUE referencia_pago_externa en transacciones
+--   7. next_retry_at en eventos_pendientes
+--   8. Estados unificados a UPPERCASE
+--   9. CHECKS financieros (total >= 0, precio_unitario >= 0, monto_total >= 0)
+--  10. FK direccion_envio_id en pedidos y transacciones
+--  12. Índice compuesto transacciones(usuario_id, estado)
+--  13. correlation_id y event_id en eventos_pendientes
+--  14. Protección contra DELETE accidental
+--  15. GENERATED ALWAYS AS IDENTITY en lugar de SERIAL
 -- =============================================================================
 
 -- =============================================================================
 -- 1. FUNCIÓN DE TRIGGER: actualizar_updated_at()
--- =============================================================================
--- Actualiza automáticamente la columna updated_at al timestamp actual
--- en cada UPDATE. Usada por triggers en carrito, direcciones, pedidos, etc.
 -- =============================================================================
 CREATE OR REPLACE FUNCTION actualizar_updated_at()
 RETURNS TRIGGER AS $$
@@ -32,61 +32,77 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =============================================================================
--- 2. TABLA: transacciones
+-- 2. FUNCIÓN DE TRIGGER: prevent_delete()
 -- =============================================================================
--- Registro de transacciones de pago. Cada fila representa un intento de
--- checkout iniciado por un usuario. Las referencias a usuarios son externas
--- (sistema de auth) por lo que no hay FK a tabla local de usuarios.
---
--- Estados válidos (controlados por la aplicación):
---   PENDIENTE  → creada, esperando confirmación de pago
---   APROBADA   → pago confirmado por webhook
---   RECHAZADA  → pago rechazado por la pasarela
+-- Previene DELETE en tablas críticas (transacciones, pedidos)
+CREATE OR REPLACE FUNCTION prevent_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'DELETE no permitido en esta tabla. Usa soft-delete si es necesario.';
+END;
+$$ LANGUAGE plpgsql;
+
 -- =============================================================================
+-- 3. TABLA: transacciones
+-- =============================================================================
+-- Estados válidos: PENDIENTE, APROBADA, RECHAZADA (UPPERCASE)
 CREATE TABLE IF NOT EXISTS transacciones (
     id                      UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
     usuario_id              INTEGER        NOT NULL,
     usuario_email           VARCHAR(255),
     items                   JSONB,
-    total                   NUMERIC(12,2),
+    total                   NUMERIC(12,2)  CHECK (total >= 0),
     moneda                  VARCHAR(3)     DEFAULT 'COP',
-    estado                  VARCHAR(20)    NOT NULL DEFAULT 'PENDIENTE',
+    estado                  VARCHAR(20)    NOT NULL DEFAULT 'PENDIENTE'
+                                         CHECK (estado IN ('PENDIENTE', 'APROBADA', 'RECHAZADA')),
     referencia_pago_externa VARCHAR(255),
     ip_address              VARCHAR(45),
     user_agent              TEXT,
     ultimo_intento_pago     TIMESTAMPTZ,
     direccion_envio_id      UUID,
     created_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+    updated_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_transacciones_referencia_pago_externa UNIQUE (referencia_pago_externa)
 );
 
+-- Trigger updated_at para transacciones (CORRECCIÓN #2)
+CREATE TRIGGER trg_transacciones_updated_at
+    BEFORE UPDATE ON transacciones
+    FOR EACH ROW
+    EXECUTE FUNCTION actualizar_updated_at();
+
+-- Trigger prevent_delete para transacciones (CORRECCIÓN #14)
+CREATE TRIGGER trg_transacciones_prevent_delete
+    BEFORE DELETE ON transacciones
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_delete();
+
 -- =============================================================================
--- 3. TABLA: carrito
--- =============================================================================
--- Cada fila representa un producto en el carrito de un usuario.
--- usuario_id es un identificador externo del sistema de auth.
--- ultima_actividad se usa para limpieza TTL de 30 días.
+-- 4. TABLA: carrito
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS carrito (
     id                UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
     usuario_id        INTEGER        NOT NULL,
     producto_id       VARCHAR(50)    NOT NULL,
     producto_nombre   TEXT           NOT NULL,
-    precio_unitario   NUMERIC(12,2)  NOT NULL,
+    precio_unitario   NUMERIC(12,2)  NOT NULL CHECK (precio_unitario >= 0),
     cantidad          INTEGER        NOT NULL CHECK (cantidad > 0),
     ultima_actividad  TIMESTAMPTZ    DEFAULT NOW(),
     created_at        TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
 
-    -- Evitar duplicados del mismo producto en el carrito del mismo usuario
     CONSTRAINT uq_carrito_usuario_producto UNIQUE (usuario_id, producto_id)
 );
 
+-- Trigger updated_at para carrito
+CREATE TRIGGER trg_carrito_updated_at
+    BEFORE UPDATE ON carrito
+    FOR EACH ROW
+    EXECUTE FUNCTION actualizar_updated_at();
+
 -- =============================================================================
--- 4. TABLA: direcciones
--- =============================================================================
--- Direcciones de envío de los usuarios. Máximo 5 por usuario
--- (validado por la aplicación, no por BD).
+-- 5. TABLA: direcciones
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS direcciones (
     id                UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -101,130 +117,125 @@ CREATE TABLE IF NOT EXISTS direcciones (
     updated_at        TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 
--- =============================================================================
--- 5. TABLA: pedidos
--- =============================================================================
--- Pedidos generados tras confirmación de pago.
--- Cada pedido está vinculado a una transacción aprobada.
--- =============================================================================
-CREATE TABLE IF NOT EXISTS pedidos (
-    id                  UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
-    usuario_id          INTEGER        NOT NULL,
-    estado              VARCHAR(20)    NOT NULL DEFAULT 'Pendiente'
-                                        CHECK (estado IN (
-                                            'Pendiente','Procesando',
-                                            'Enviado','Entregado','Cancelado'
-                                        )),
-    items               JSONB          NOT NULL,
-    monto_total         NUMERIC(12,2)  NOT NULL,
-    direccion_envio_id  UUID,
-    transaccion_id      UUID,
-    created_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW()
-);
-
--- =============================================================================
--- 6. TABLA: log_estados
--- =============================================================================
--- Registra cada cambio de estado de pedido para auditoría.
--- Los cambios pueden ser hechos por vendedor, sistema o admin.
--- =============================================================================
-CREATE TABLE IF NOT EXISTS log_estados (
-    id                  SERIAL         PRIMARY KEY,
-    pedido_id           UUID           NOT NULL REFERENCES pedidos(id),
-    estado_anterior     VARCHAR(20)    NOT NULL,
-    estado_nuevo        VARCHAR(20)    NOT NULL,
-    cambiado_por        INTEGER        NOT NULL,
-    cambiado_por_tipo   VARCHAR(20)    NOT NULL DEFAULT 'vendedor'
-                                        CHECK (cambiado_por_tipo IN (
-                                            'vendedor','sistema','admin'
-                                        )),
-    created_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW()
-);
-
--- =============================================================================
--- 7. TABLA: eventos_pendientes
--- =============================================================================
--- Almacena eventos que fallaron al procesarse y deben reintentarse.
--- Se usa como cola de reintentos simple (sin Kafka/RabbitMQ).
--- =============================================================================
-CREATE TABLE IF NOT EXISTS eventos_pendientes (
-    id            SERIAL         PRIMARY KEY,
-    tipo          VARCHAR(50)    NOT NULL,
-    payload       JSONB          NOT NULL,
-    intentos      INT            NOT NULL DEFAULT 0,
-    max_intentos  INT            NOT NULL DEFAULT 5,
-    estado        VARCHAR(20)    NOT NULL DEFAULT 'pendiente'
-                                   CHECK (estado IN (
-                                       'pendiente','procesando',
-                                       'fallido','completado'
-                                   )),
-    created_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW()
-);
-
--- =============================================================================
--- 8. ÍNDICES
--- =============================================================================
-
--- transacciones
-CREATE INDEX IF NOT EXISTS idx_transacciones_usuario_id
-    ON transacciones(usuario_id);
-CREATE INDEX IF NOT EXISTS idx_transacciones_referencia_pago
-    ON transacciones(referencia_pago_externa);
-CREATE INDEX IF NOT EXISTS idx_transacciones_created_at
-    ON transacciones(created_at);
-
--- carrito
-CREATE INDEX IF NOT EXISTS idx_carrito_usuario_id
-    ON carrito(usuario_id);
-
--- direcciones
-CREATE INDEX IF NOT EXISTS idx_direcciones_usuario_id
-    ON direcciones(usuario_id);
-
--- pedidos
-CREATE INDEX IF NOT EXISTS idx_pedidos_usuario_id
-    ON pedidos(usuario_id);
-CREATE INDEX IF NOT EXISTS idx_pedidos_transaccion_id
-    ON pedidos(transaccion_id);
-
--- log_estados
-CREATE INDEX IF NOT EXISTS idx_log_estados_pedido_id
-    ON log_estados(pedido_id);
-CREATE INDEX IF NOT EXISTS idx_log_estados_fecha
-    ON log_estados(created_at DESC);
-
--- eventos_pendientes
-CREATE INDEX IF NOT EXISTS idx_eventos_pendientes_estado
-    ON eventos_pendientes(estado);
-CREATE INDEX IF NOT EXISTS idx_eventos_pendientes_tipo
-    ON eventos_pendientes(tipo);
-
--- =============================================================================
--- 9. TRIGGERS (para actualizar updated_at automáticamente)
--- =============================================================================
-
--- carrito
-CREATE OR REPLACE TRIGGER trg_carrito_updated_at
-    BEFORE UPDATE ON carrito
-    FOR EACH ROW
-    EXECUTE FUNCTION actualizar_updated_at();
-
--- direcciones
-CREATE OR REPLACE TRIGGER trg_direcciones_updated_at
+-- Trigger updated_at para direcciones
+CREATE TRIGGER trg_direcciones_updated_at
     BEFORE UPDATE ON direcciones
     FOR EACH ROW
     EXECUTE FUNCTION actualizar_updated_at();
 
--- pedidos
-CREATE OR REPLACE TRIGGER trg_pedidos_updated_at
+-- =============================================================================
+-- 6. TABLA: pedidos
+-- =============================================================================
+-- Estados válidos: PENDIENTE, PROCESANDO, ENVIADO, ENTREGADO, CANCELADO (UPPERCASE)
+CREATE TABLE IF NOT EXISTS pedidos (
+    id                  UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
+    usuario_id          INTEGER        NOT NULL,
+    estado              VARCHAR(20)    NOT NULL DEFAULT 'PENDIENTE'
+                                         CHECK (estado IN (
+                                             'PENDIENTE', 'PROCESANDO',
+                                             'ENVIADO', 'ENTREGADO', 'CANCELADO'
+                                         )),
+    items               JSONB          NOT NULL,
+    monto_total         NUMERIC(12,2)  NOT NULL CHECK (monto_total >= 0),
+    direccion_envio_id  UUID,
+    transaccion_id      UUID,
+    created_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_pedidos_transaccion_id UNIQUE (transaccion_id)
+);
+
+-- Trigger updated_at para pedidos
+CREATE TRIGGER trg_pedidos_updated_at
     BEFORE UPDATE ON pedidos
     FOR EACH ROW
     EXECUTE FUNCTION actualizar_updated_at();
 
--- eventos_pendientes
-CREATE OR REPLACE TRIGGER trg_eventos_pendientes_updated_at
+-- Trigger prevent_delete para pedidos
+CREATE TRIGGER trg_pedidos_prevent_delete
+    BEFORE DELETE ON pedidos
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_delete();
+
+-- =============================================================================
+-- 7. TABLA: log_estados
+-- =============================================================================
+-- Usa GENERATED ALWAYS AS IDENTITY en lugar de SERIAL (CORRECCIÓN #15)
+CREATE TABLE IF NOT EXISTS log_estados (
+    id                  BIGINT         PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    pedido_id           UUID           NOT NULL,
+    estado_anterior     VARCHAR(20)    NOT NULL,
+    estado_nuevo        VARCHAR(20)    NOT NULL,
+    cambiado_por        INTEGER        NOT NULL,
+    cambiado_por_tipo   VARCHAR(20)    NOT NULL DEFAULT 'vendedor'
+                                         CHECK (cambiado_por_tipo IN (
+                                             'vendedor', 'sistema', 'admin'
+                                         )),
+    created_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+-- =============================================================================
+-- 8. TABLA: eventos_pendientes
+-- =============================================================================
+-- Estados válidos: PENDIENTE, PROCESANDO, COMPLETADO, FALLIDO (UPPERCASE)
+-- Agregadas columnas: next_retry_at, correlation_id, event_id (CORRECCIONES #7, #13)
+CREATE TABLE IF NOT EXISTS eventos_pendientes (
+    id                  UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
+    tipo                VARCHAR(50)    NOT NULL,
+    payload             JSONB,
+    intentos            INTEGER        NOT NULL DEFAULT 0,
+    max_intentos        INTEGER        NOT NULL DEFAULT 3,
+    estado              VARCHAR(20)    NOT NULL DEFAULT 'PENDIENTE'
+                                         CHECK (estado IN (
+                                             'PENDIENTE', 'PROCESANDO', 'COMPLETADO', 'FALLIDO'
+                                         )),
+    next_retry_at       TIMESTAMPTZ,
+    correlation_id      UUID,
+    event_id            UUID           DEFAULT gen_random_uuid(),
+    created_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+-- Trigger updated_at para eventos_pendientes
+CREATE TRIGGER trg_eventos_pendientes_updated_at
     BEFORE UPDATE ON eventos_pendientes
     FOR EACH ROW
     EXECUTE FUNCTION actualizar_updated_at();
+
+-- =============================================================================
+-- 9. ÍNDICES COMPUESTOS (CORRECCIÓN #12)
+-- =============================================================================
+CREATE INDEX IF NOT EXISTS idx_transacciones_usuario_estado
+    ON transacciones(usuario_id, estado);
+
+CREATE INDEX IF NOT EXISTS idx_transacciones_created_at
+    ON transacciones(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_eventos_pendientes_estado_next_retry
+    ON eventos_pendientes(estado, next_retry_at);
+
+CREATE INDEX IF NOT EXISTS idx_pedidos_usuario_estado
+    ON pedidos(usuario_id, estado);
+
+-- =============================================================================
+-- 10. CLAVES FORÁNEAS (CORRECCIONES #3, #10)
+-- =============================================================================
+-- FK pedidos → transacciones
+ALTER TABLE pedidos
+    ADD CONSTRAINT fk_pedidos_transaccion
+    FOREIGN KEY (transaccion_id) REFERENCES transacciones(id);
+
+-- FK transacciones → direcciones
+ALTER TABLE transacciones
+    ADD CONSTRAINT fk_transacciones_direccion
+    FOREIGN KEY (direccion_envio_id) REFERENCES direcciones(id);
+
+-- FK pedidos → direcciones
+ALTER TABLE pedidos
+    ADD CONSTRAINT fk_pedidos_direccion
+    FOREIGN KEY (direccion_envio_id) REFERENCES direcciones(id);
+
+-- FK log_estados → pedidos
+ALTER TABLE log_estados
+    ADD CONSTRAINT fk_log_estados_pedido
+    FOREIGN KEY (pedido_id) REFERENCES pedidos(id);

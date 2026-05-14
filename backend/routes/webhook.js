@@ -67,9 +67,12 @@ module.exports = (pool, io) => {
 
         const estadoDB = ESTADO_MAP[estado] || estado;
 
-        try {
+        const client = await pool.connect();
 
-            const resultado = await pool.query(
+        try {
+            await client.query('BEGIN');
+
+            const resultado = await client.query(
                 `UPDATE transacciones
                  SET    estado = $1,
                         referencia_pago_externa = COALESCE($2, referencia_pago_externa),
@@ -80,6 +83,7 @@ module.exports = (pool, io) => {
             );
 
             if (resultado.rows.length === 0) {
+                await client.query('ROLLBACK');
                 console.error(`[POST /pago-confirmado] Transacción no encontrada: ${transaccion_id}`);
                 return res.status(404).json({ error: 'Transacción no encontrada' });
             }
@@ -87,20 +91,20 @@ module.exports = (pool, io) => {
             const transaccion = resultado.rows[0];
 
             if (estadoDB === 'APROBADA') {
-                await pool.query('DELETE FROM carrito WHERE usuario_id = $1', [transaccion.usuario_id]);
+                await client.query('DELETE FROM carrito WHERE usuario_id = $1', [transaccion.usuario_id]);
 
-        let items = transaccion.items;
-        if (typeof items === 'string') {
-            try { items = JSON.parse(items); } catch (e) { items = []; }
-        }
+                let items = transaccion.items;
+                if (typeof items === 'string') {
+                    try { items = JSON.parse(items); } catch (e) { items = []; }
+                }
 
-        const pedidoResult = await pool.query(
-            `INSERT INTO pedidos (usuario_id, estado, items, monto_total, transaccion_id, direccion_envio_id)
-             VALUES ($1, 'Pendiente', $2, $3, $4, $5)
-             RETURNING id`,
-            [transaccion.usuario_id, JSON.stringify(items), transaccion.total, transaccion.id, transaccion.direccion_envio_id]
-        );
-        const pedidoId = pedidoResult.rows[0].id;
+                const pedidoResult = await client.query(
+                    `INSERT INTO pedidos (usuario_id, estado, items, monto_total, transaccion_id, direccion_envio_id)
+                     VALUES ($1, 'PENDIENTE', $2, $3, $4, $5)
+                     RETURNING id`,
+                    [transaccion.usuario_id, JSON.stringify(items), transaccion.total, transaccion.id, transaccion.direccion_envio_id]
+                );
+                const pedidoId = pedidoResult.rows[0].id;
 
                 if (Array.isArray(items)) {
                     for (const item of items) {
@@ -108,9 +112,9 @@ module.exports = (pool, io) => {
                             await productosClient.deducirStock(item.producto_id, item.cantidad);
                         } catch (stockErr) {
                             console.error(`[POST /pago-confirmado] Error deduciendo stock para producto_id=${item.producto_id}:`, stockErr.message);
-                            await pool.query(
+                            await client.query(
                                 `INSERT INTO eventos_pendientes (tipo, payload, intentos, estado)
-                                 VALUES ($1, $2, 0, 'pendiente')`,
+                                 VALUES ($1, $2, 0, 'PENDIENTE')`,
                                 ['deducir_stock', JSON.stringify({ producto_id: item.producto_id, cantidad: item.cantidad, pedido_id: pedidoId })]
                             );
                         }
@@ -129,9 +133,9 @@ module.exports = (pool, io) => {
                     });
                 } catch (notifErr) {
                     console.error(`[POST /pago-confirmado] Error notificando pedido creado:`, notifErr.message);
-                    await pool.query(
+                    await client.query(
                         `INSERT INTO eventos_pendientes (tipo, payload, intentos, estado)
-                         VALUES ($1, $2, 0, 'pendiente')`,
+                         VALUES ($1, $2, 0, 'PENDIENTE')`,
                         ['notificar_pedido', JSON.stringify({
                             pedido_id: pedidoId,
                             usuario_id: transaccion.usuario_id,
@@ -144,6 +148,9 @@ module.exports = (pool, io) => {
                     );
                 }
             }
+
+            await client.query('COMMIT');
+            client.release();
 
             const usuarioRoom = `usuario_${transaccion.usuario_id}`;
             io.of('/pedidos').to(usuarioRoom).emit('transaccion:actualizada', {
@@ -164,6 +171,8 @@ module.exports = (pool, io) => {
             });
 
         } catch (err) {
+            await client.query('ROLLBACK').catch(() => {});
+            client.release();
             console.error('[POST /pago-confirmado] Error al actualizar transacción:', err);
             return res.status(500).json({ error: 'Error interno al procesar la notificación' });
         }

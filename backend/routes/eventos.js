@@ -1,6 +1,11 @@
 /**
  * Rutas para gestión de eventos pendientes (cola de reintentos)
  * Permite reintentar eventos fallidos de forma manual o por cron
+ * 
+ * CORRECCIONES APLICADAS:
+ *   - FOR UPDATE SKIP LOCKED para evitar doble procesamiento
+ *   - next_retry_at para backoff exponencial
+ *   - Estados unificados a UPPERCASE
  */
 
 const express = require('express');
@@ -15,6 +20,7 @@ module.exports = (pool, verificarToken) => {
      * POST /api/eventos/reintentar
      * Reintenta procesar todos los eventos pendientes que no hayan
      * superado el máximo de intentos permitidos.
+     * Usa FOR UPDATE SKIP LOCKED para evitar doble procesamiento.
      * Requiere autenticación.
      */
     router.post('/reintentar', verificarToken, async (req, res) => {
@@ -23,12 +29,15 @@ module.exports = (pool, verificarToken) => {
         let fallidos = 0;
 
         try {
+            // FOR UPDATE SKIP LOCKED para evitar doble procesamiento
             const { rows: eventos } = await pool.query(
                 `SELECT id, tipo, payload, intentos, max_intentos
                  FROM   eventos_pendientes
-                 WHERE  estado = 'pendiente'
+                 WHERE  estado = 'PENDIENTE'
                    AND  intentos < max_intentos
-                 ORDER  BY created_at ASC`
+                   AND  (next_retry_at IS NULL OR next_retry_at <= NOW())
+                 ORDER  BY created_at ASC
+                 FOR UPDATE SKIP LOCKED`
             );
 
             for (const evento of eventos) {
@@ -36,7 +45,7 @@ module.exports = (pool, verificarToken) => {
 
                 await pool.query(
                     `UPDATE eventos_pendientes
-                     SET    estado = 'procesando',
+                     SET    estado = 'PROCESANDO',
                             intentos = intentos + 1,
                             updated_at = NOW()
                      WHERE  id = $1`,
@@ -56,27 +65,38 @@ module.exports = (pool, verificarToken) => {
                         await notificacionesPedidosClient.notificarPedidoCreado(payload);
                     }
 
+                    // Calcular next_retry_at con backoff exponencial
+                    const nuevoIntentos = evento.intentos + 1;
+                    const delaySeconds = Math.pow(2, nuevoIntentos);
+                    const nextRetry = new Date(Date.now() + delaySeconds * 1000);
+
                     await pool.query(
                         `UPDATE eventos_pendientes
-                         SET    estado = 'completado',
+                         SET    estado = 'COMPLETADO',
+                                next_retry_at = $1,
                                 updated_at = NOW()
-                         WHERE  id = $1`,
-                        [evento.id]
+                         WHERE  id = $2`,
+                        [nextRetry, evento.id]
                     );
                     exitosos++;
 
                 } catch (err) {
+                    // Calcular siguiente retry con backoff exponencial
                     const nuevoIntentos = evento.intentos + 1;
+                    const delaySeconds = Math.pow(2, nuevoIntentos);
+                    const nextRetry = new Date(Date.now() + delaySeconds * 1000);
+                    
                     const nuevoEstado = nuevoIntentos >= evento.max_intentos
-                        ? 'fallido'
-                        : 'pendiente';
+                        ? 'FALLIDO'
+                        : 'PENDIENTE';
 
                     await pool.query(
                         `UPDATE eventos_pendientes
                          SET    estado = $1,
+                                next_retry_at = $2,
                                 updated_at = NOW()
-                         WHERE  id = $2`,
-                        [nuevoEstado, evento.id]
+                         WHERE  id = $3`,
+                        [nuevoEstado, nextRetry, evento.id]
                     );
                     fallidos++;
                 }
@@ -105,9 +125,10 @@ module.exports = (pool, verificarToken) => {
     router.get('/pendientes', verificarToken, async (req, res) => {
         try {
             const { rows } = await pool.query(
-                `SELECT id, tipo, payload, intentos, max_intentos, estado, created_at, updated_at
+                `SELECT id, tipo, payload, intentos, max_intentos, estado, 
+                        next_retry_at, correlation_id, event_id, created_at, updated_at
                  FROM   eventos_pendientes
-                 WHERE  estado IN ('pendiente', 'procesando', 'fallido')
+                 WHERE  estado IN ('PENDIENTE', 'PROCESANDO', 'FALLIDO')
                  ORDER  BY created_at DESC`
             );
 
