@@ -1,6 +1,6 @@
-/**
+﻿/**
  * Webhook para recibir notificaciones de pago del servicio externo
- * NO requiere verificarToken - es un endpoint público que recibe notificaciones del servicio de pagos
+ * NO requiere verificarToken - es un endpoint pÃºblico que recibe notificaciones del servicio de pagos
  */
 
 const express = require('express');
@@ -8,6 +8,7 @@ const router  = express.Router();
 const pagosClient = require('../services/pagosClient');
 const productosClient = require('../services/productosClient');
 const notificacionesPedidosClient = require('../services/notificacionesPedidosClient');
+const enviosClient = require('../services/enviosClient');
 
 module.exports = (pool, io) => {
 
@@ -33,8 +34,8 @@ module.exports = (pool, io) => {
             const esValida = pagosClient.verificarSignature(rawBody, signature);
             
             if (!esValida) {
-                console.error('[POST /pago-confirmado] Signature inválida');
-                return res.status(401).json({ error: 'Signature inválida' });
+                console.error('[POST /pago-confirmado] Signature invÃ¡lida');
+                return res.status(401).json({ error: 'Signature invÃ¡lida' });
             }
         } catch (err) {
             console.error('[POST /pago-confirmado] Error al verificar signature:', err.message);
@@ -56,16 +57,36 @@ module.exports = (pool, io) => {
         }
 
 
+        const estadoNormalizado = String(estado || '').trim().toLowerCase();
         const ESTADO_MAP = {
             'approved': 'APROBADA',
+            'aprobada': 'APROBADA',
+            'aceptada': 'APROBADA',
             'completed': 'APROBADA',
+
             'pending': 'PENDIENTE',
+            'pendiente': 'PENDIENTE',
+            'processing': 'PENDIENTE',
+            'in_process': 'PENDIENTE',
+
             'rejected': 'RECHAZADA',
+            'rechazada': 'RECHAZADA',
+            'denegada': 'RECHAZADA',
+            'denied': 'RECHAZADA',
+            'declined': 'RECHAZADA',
+            'failed': 'RECHAZADA',
             'cancelled': 'RECHAZADA',
+            'canceled': 'RECHAZADA',
             'refunded': 'RECHAZADA'
         };
 
-        const estadoDB = ESTADO_MAP[estado] || estado;
+        const estadoDB = ESTADO_MAP[estadoNormalizado] || String(estado || '').trim().toUpperCase();
+        const ESTADOS_VALIDOS_DB = new Set(['PENDIENTE', 'APROBADA', 'RECHAZADA']);
+
+        if (!ESTADOS_VALIDOS_DB.has(estadoDB)) {
+            console.error('[POST /pago-confirmado] Estado no soportado:', estado);
+            return res.status(400).json({ error: 'Estado no soportado' });
+        }
 
         const client = await pool.connect();
 
@@ -84,8 +105,8 @@ module.exports = (pool, io) => {
 
             if (resultado.rows.length === 0) {
                 await client.query('ROLLBACK');
-                console.error(`[POST /pago-confirmado] Transacción no encontrada: ${transaccion_id}`);
-                return res.status(404).json({ error: 'Transacción no encontrada' });
+                console.error(`[POST /pago-confirmado] TransacciÃ³n no encontrada: ${transaccion_id}`);
+                return res.status(404).json({ error: 'TransacciÃ³n no encontrada' });
             }
 
             const transaccion = resultado.rows[0];
@@ -147,6 +168,28 @@ module.exports = (pool, io) => {
                         })]
                     );
                 }
+
+                /* ── Crear envío (fire & forget con fallback) ── */
+                try {
+                    await enviosClient.crearEnvio({
+                        pedido_id: pedidoId,
+                        direccion_envio_id: transaccion.direccion_envio_id,
+                        items: items,
+                        monto_total: transaccion.total
+                    });
+                } catch (envioErr) {
+                    console.error(`[POST /pago-confirmado] Error creando envío:`, envioErr.message);
+                    await client.query(
+                        `INSERT INTO eventos_pendientes (tipo, payload, intentos, estado)
+                         VALUES ($1, $2, 0, 'PENDIENTE')`,
+                        ['crear_envio', JSON.stringify({
+                            pedido_id: pedidoId,
+                            direccion_envio_id: transaccion.direccion_envio_id,
+                            items: items,
+                            monto_total: transaccion.total
+                        })]
+                    );
+                }
             }
 
             await client.query('COMMIT');
@@ -158,11 +201,11 @@ module.exports = (pool, io) => {
             });
 
             if (estadoDB === 'APROBADA') {
-                io.of('/pedidos').to(usuarioRoom).emit('carrito:limpiado', { mensaje: 'Carrito limpiado después de pago exitoso' });
+                io.of('/pedidos').to(usuarioRoom).emit('carrito:limpiado', { mensaje: 'Carrito limpiado despuÃ©s de pago exitoso' });
             }
 
             return res.json({
-                mensaje: 'Notificación procesada correctamente',
+                mensaje: 'NotificaciÃ³n procesada correctamente',
                 transaccion: {
                     id: transaccion.id,
                     estado: transaccion.estado,
@@ -173,10 +216,13 @@ module.exports = (pool, io) => {
         } catch (err) {
             await client.query('ROLLBACK').catch(() => {});
             client.release();
-            console.error('[POST /pago-confirmado] Error al actualizar transacción:', err);
-            return res.status(500).json({ error: 'Error interno al procesar la notificación' });
+            console.error('[POST /pago-confirmado] Error al actualizar transacciÃ³n:', err);
+            return res.status(500).json({ error: 'Error interno al procesar la notificaciÃ³n' });
         }
     });
 
     return router;
 };
+
+
+

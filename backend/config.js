@@ -10,6 +10,8 @@ module.exports = {
 
   pagosWebhookSecret: process.env.PAGOS_WEBHOOK_SECRET || '',
 
+  enviosServiceUrl: process.env.ENVIOS_SERVICE_URL || 'http://localhost:4004',
+
   jwtSecret: process.env.JWT_SECRET || '',
   devMode: process.env.DEV_MODE === 'true',
 
