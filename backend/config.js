@@ -25,15 +25,6 @@ const config = {
     connectionTimeoutMillis: 3000,
   },
 
-  externalDb: {
-    host: process.env.EXTERNAL_DB_HOST || '',
-    port: parseInt(process.env.EXTERNAL_DB_PORT || '5432'),
-    database: process.env.EXTERNAL_DB_NAME || process.env.DB_NAME || 'sistema_d_compra',
-    user: process.env.EXTERNAL_DB_USER || process.env.DB_USER || 'postgres',
-    password: process.env.EXTERNAL_DB_PASSWORD || process.env.DB_PASSWORD || '1234',
-    connectionTimeoutMillis: 5000,
-  },
-
   corsOrigins: (process.env.CORS_ORIGINS || process.env.TU_LOCAL_URL || 'http://localhost:5173')
     .split(',')
     .map(s => s.trim()),

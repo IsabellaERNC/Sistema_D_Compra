@@ -2,13 +2,13 @@
 
 ## Project Identity
 
-This is the **carrito service** of Sistema D Compra, an Express-based monolith running on config.port (default 3000). It handles cart management, checkout flow, payments, orders, addresses, events, and vendor operations. All other microservices (auth, catalogo, pagos, notificaciones, envios) are external HTTP services consumed via service clients in `backend/services/`.
+This is the **carrito service** of Sistema D Compra, an Express-based monolith running on port 3000 on Cloud Run. It handles cart management, checkout flow, payments, orders, addresses, events, and vendor operations. All other microservices (auth, catalogo, pagos, notificaciones, envios) are external HTTP services consumed via service clients in `backend/services/`.
 
 ## Technology Stack
 
 | Component | Technology | Notes |
 |---|---|---|
-| Runtime | Node.js 18+ | Alpine in Docker |
+| Runtime | Node.js 18+ | `"type": "commonjs"` in package.json |
 | Framework | Express 4 | `require('express')`, `express.Router()` |
 | Module system | CommonJS | `"type": "commonjs"` in package.json |
 | Database driver | `pg` (node-postgres) | `Pool` from config.js |
@@ -100,7 +100,7 @@ module.exports = (pool, verificarToken, ...additionalDeps) => {
 `server.js` is the entry point. It does the following in order:
 
 1. Loads `config.js` (reads all env vars with defaults).
-2. Attempts to connect to the primary PostgreSQL pool. Falls back to the external DB in Docker.
+2. Connects to PostgreSQL using the managed pool from config.
 3. Creates the HTTP server and Socket.IO instance.
 4. Registers the `verificarToken` middleware (closure over `effectiveDevMode`).
 5. Mounts all 9 route modules.
@@ -109,7 +109,7 @@ module.exports = (pool, verificarToken, ...additionalDeps) => {
 - Some routes import additional service clients at the top of their file (e.g., `pedidos.js` imports `pagosClient`, `notificacionesClient`).
 - The `adapters.js` file in `lib/` provides a unified re-export point for all 5 service clients.
 
-### Dual DB Fallback (Runtime)
+### DEV_MODE Auto-Detection
 
 ```js
 async function startServer() {
@@ -124,34 +124,87 @@ async function startServer() {
 }
 ```
 
-> **Updated in production-hardening (2026-05-18)**: This dual DB fallback is intended for local development only. In production with a known DB URL, replace with a single pool: `const pool = await tryPool(config.db)`. The plan also documents step-by-step cleanup instructions (see root AGENTS.md Microservice URL Migration Guide).
+> This dual DB fallback is for local development only. In Cloud Run, a single pool connects directly to Cloud SQL.
 
 ### New Features (Production Hardening — May 2026)
 
-- **config.port**: Port is now configurable via `process.env.PORT` (default `'3000'`), no longer hardcoded. Read from `config.port` exported by `config.js`.
-- **/health endpoint**: `GET /api/health` returns `{ status: 'ok', timestamp, uptime }` — no auth required, always available. Great for load balancer health checks.
-- **Graceful shutdown**: `gracefulShutdown()` function stops accepting new connections, closes HTTP server, closes DB pool, then exits with code 0. Triggered by SIGTERM or SIGINT. Forces exit after 10s timeout.
-- **validateEnv()**: `config.js` exports `validateEnv()` that checks 8 required environment variables at startup: JWT_SECRET, DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, PAGOS_WEBHOOK_SECRET, AUTH_API_KEY, PAGOS_API_KEY. Call from server.js after loading config.
+- **config.port**: Port is now configurable via `process.env.PORT` (default `'3000'`). No more hardcoded port.
+- **validateEnv()**: Called at startup in `server.js`. Checks 8 required vars (`JWT_SECRET`, `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `PAGOS_WEBHOOK_SECRET`, `AUTH_API_KEY`, `PAGOS_API_KEY`). Warns in dev, throws in production.
+- **createServiceClient factory** in `lib/adapters.js`: All 5 HTTP service clients now use `requestWithRetry` with AbortController timeout (5s) and 1 automatic retry on network errors.
+- **Graceful shutdown**: `SIGTERM` and `SIGINT` handlers close the HTTP server (stop accepting connections) and drain the DB pool. Force-exits after 10s if cleanup stalls.
+- **`/health` endpoint**: Returns `{ status, timestamp, uptime }`. Used by Cloud Run health checks.
+- **NGINX removed**: All Docker Compose and Nginx gateway infrastructure has been removed. The backend exposes port 3000 directly to Cloud Run.
 
 ---
 
-## 4. Service Client Pattern
+## 4. Route Details
 
-All service clients live in `backend/services/`. They follow an identical wrapper pattern using Node.js native `fetch()` (NOT axios).
+### 4.1 Carrito (`/api/carrito/carrito`)
+- **GET `/`** — List items in the active cart for the authenticated user. Returns `{ data: rows }`.
+- **POST `/`** — Add item to cart. Validates stock via `productosClient`. If item exists, increments quantity. Returns `{ data: newItem }`.
+- **PATCH `/:itemId`** — Update quantity or `notas` of a cart item.
+- **DELETE `/:itemId`** — Remove item from cart.
+- **DELETE `/`** — Clear the entire cart.
+- **Socket.IO**: On cart mutations, emits `cart:updated` to the user's room.
 
-### Standard Structure
+### 4.2 Checkout (`/api/carrito/checkout`)
+- **POST `/`** — Rate-limited (1 request per user per 5s). Validates cart ownership, stock, shipping address. Creates pedido + transaccion, calls `pagosClient.crearCheckout()` for MercadoPago preference, returns payment URL.
+- **States**: `'PENDIENTE'`, `'RECHAZADA'`, `'COMPLETADA'`.
+
+### 4.3 Direcciones (`/api/carrito/direcciones`)
+- **GET `/`** — List user's shipping addresses.
+- **POST `/`** — Add new address.
+- **PATCH `/:id`** — Update address.
+- **DELETE `/:id`** — Delete address.
+
+### 4.4 Eventos (`/api/carrito/eventos-pendientes`)
+- **GET `/`** — Returns pending events. Uses `FOR UPDATE SKIP LOCKED` to prevent double-processing. Exponentially backs off `next_retry_at` on failures.
+- **States**: `'PENDIENTE'`, `'PROCESANDO'`, `'COMPLETADO'`, `'FALLIDO'`.
+
+### 4.5 Pedidos (`/api/carrito/pedidos`)
+- **GET `/`** — List user's orders, most recent first.
+- **GET `/vendedor`** — Vendor dashboard: list orders containing their products.
+- **PATCH `/:id/estado`** — Transition order status using `TRANSICIONES_VALIDAS` table. Emits `pedido:actualizado` via Socket.IO.
+- **Valid transitions**: `'PENDIENTE'` → `'PROCESANDO'` → `'ENVIADO'` → `'ENTREGADO'`; any state → `'CANCELADO'`.
+
+### 4.6 Productos (`/api/carrito/productos`)
+- **GET `/`** — Query products from catalogo service by name.
+- **GET `/:id`** — Get single product by ID.
+
+### 4.7 Transacciones (`/api/carrito/transacciones`)
+- **GET `/`** — List user's transactions (payment history).
+- **States**: `'PENDIENTE'`, `'COMPLETADO'`, `'FALLIDO'`, `'REEMBOLSADO'`.
+
+### 4.8 Vendedor (`/api/carrito/vendedor`)
+- **GET `/resumen`** — Summary stats (total sales, pending orders) for vendor's products.
+- **GET `/productos`** — List vendor's products.
+- **GET `/pedidos`** — List orders containing vendor's products, with pagination.
+- Uses `vendedorMiddleware.js` to extract vendor info from JWT.
+
+### 4.9 Webhook (`POST /api/carrito/pago-confirmado`)
+- **Public endpoint** (no `verificarToken`). Validates HMAC signature via `pagosClient.verificarSignature()`.
+- On valid payment: updates pedido status, records transaccion, emits Socket.IO events, calls `notificacionesClient` for email notification.
+- Uses atomic transaction (BEGIN/COMMIT/ROLLBACK with savepoints).
+
+---
+
+## 5. Service Clients (HTTP)
+
+### Pattern
+
+All 5 service clients in `backend/services/` follow the same pattern:
 
 ```js
 const config = require('../config');
-
 const BASE_URL = config.someServiceUrl;
 
 async function request(endpoint, options = {}) {
     const url = `${BASE_URL}${endpoint}`;
-
     const defaultOptions = {
-        headers: { 'Content-Type': 'application/json' },
-        ...(config.someApiKey ? { 'X-API-Key': config.someApiKey } : {})
+        headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': config.someApiKey,
+        },
     };
 
     const finalOptions = {
@@ -229,114 +282,33 @@ async function requestWithRetry(endpoint, options = {}, retries = 1, timeout = 5
 
 ### Shared HTTP Client Factory (New)
 
-`backend/lib/adapters.js` now exports `createServiceClient(baseUrl, defaultOptions)` — a factory that creates HTTP clients with built-in AbortController timeout (5s) and 1 automatic retry for network errors. Both `authClient.js` and `pagosClient.js` were refactored to use this factory, matching the pattern already used by `productosClient.js`, `enviosClient.js`, and `notificacionesPedidosClient.js`. Zero raw `fetch()` calls remain in these files.
-
-```js
-const { createServiceClient } = require('../lib/adapters');
-const client = createServiceClient(BASE_URL, {
-    headers: { 'Content-Type': 'application/json' },
-    ...(config.someApiKey ? { 'X-API-Key': config.someApiKey } : {})
-});
-
-// Single request with timeout:
-const data = await client.request('/endpoint');
-
-// Request with 1 retry on network errors:
-const data = await client.requestWithRetry('/endpoint');
-```
-
-### Export Pattern
-
-All clients export arrow functions:
-
-```js
-async function someAction(param) {
-    return request('/endpoint', { method: 'POST', body: JSON.stringify({ ... }) });
-}
-
-module.exports = { someAction, otherAction };
-```
-
-## BUG Reference Table
-
-| ID | Location | Description |
-|---|---|---|
-| BUG-01 | `pedidos.js`, `vendedor.js` | States unified to UPPERCASE canonical form |
-| BUG-03 | `pedidos.js`, `vendedor.js` | Import path corrected for notificacionesClient |
-| BUG-04 | `productosClient.js` | AbortController signal propagated to request, explicit isRetryable |
-| BUG-05 | `pagosClient.js` | Length guard before timingSafeEqual to prevent exception |
-| BUG-06 | `checkout.js` | Deduplicated address validation (moved before try block) |
-| BUG-07 | `server.js` | Removed duplicate `/api/productos` handler |
-| BUG-08 | `webhook.js` | cancelled/canceled treated as cancellation, not rejection |
-| BUG-09 | `authClient.js` | Throws Error instead of returning `{ error }` for try/catch consistency |
-| BUG-10 | `config.js`, `pagosClient.js` | PAGOS_API_KEY propagation and header inclusion |
+`backend/lib/adapters.js` now exports `createServiceClient(baseUrl, defaultOptions)` — a factory that creates HTTP clients with built-in AbortController timeout (5s) and 1 automatic retry on network errors. `authClient.js` and `pagosClient.js` have been refactored to use this factory. The remaining 3 clients (`productosClient.js`, `enviosClient.js`, `notificacionesPedidosClient.js`) continue using their own inline `requestWithRetry` but follow the same pattern and can be migrated when convenient.
 
 ---
 
-## File Index (backend/)
+## 6. Naming Conventions & Coding Rules
 
-```
-backend/
-├── .env                       # Local dev config (gitignored)
-├── AGENTS.md                  # This file
-├── config.js                  # Centralized config from env vars
-├── Dockerfile                 # node:18-alpine, port 3000
-├── package.json               # "type": "commonjs"
-├── server.js                  # Entry point: Express + Socket.IO + DB init
-├── lib/
-│   └── adapters.js            # Unified re-export of all service clients
-├── routes/
-│   ├── carrito.js             # Cart CRUD + price enrichment
-│   ├── checkout.js            # Checkout flow + MP preference creation
-│   ├── direcciones.js         # Address CRUD (max 5 per user)
-│   ├── eventos.js             # Retry queue (FOR UPDATE SKIP LOCKED)
-│   ├── pedidos.js             # Order CRUD + PDF invoice + state machine
-│   ├── productos.js           # Recommendations + listing
-│   ├── transacciones.js       # Transaction history + dev public status
-│   ├── vendedor.js            # Vendor order management + state changes
-│   ├── vendedorMiddleware.js  # Role-based authorization middleware
-│   └── webhook.js             # Payment webhook (public, HMAC auth)
-├── services/
-│   ├── authClient.js          # Auth microservice HTTP client
-│   ├── enviosClient.js        # Envios microservice HTTP client (retry)
-│   ├── notificacionesPedidosClient.js  # Notificaciones client (retry)
-│   ├── pagosClient.js         # Pagos/MercadoPago client + HMAC verify
-│   └── productosClient.js     # Catalogo client (retry + timeout)
-├── scripts/
-│   ├── create-db.js           # DB creation utility
-│   └── run-schema.js          # Schema runner
-└── test/
-    [test/ removed — mock file deleted, local testing not planned]
-```
+### JavaScript (CommonJS only)
+- `require()` / `module.exports` always. No `import/export`.
+- `async/await` always in route handlers (the factory already gives you `async`).
+- `try/catch` always — no unhandled promise rejections.
+- Return the response object: `return res.status(...).json(...)`.
 
----
+### File Naming
+- Route files: `kebab-case.js` (e.g., `carrito.js`, `checkout.js`, `eventos.js`).
+- Service clients: `kebab-case.js` with `Client` suffix (e.g., `authClient.js`, `pagosClient.js`).
 
-## MICROSERVICE URL MIGRATION GUIDE (Backend)
+### Database
+- Parameterized queries only: `pool.query('SELECT ... WHERE id = $1', [id])`.
+- Never string-concatenate user input into SQL.
+- Use the pool passed to the route factory (never import your own).
 
-When real microservice URLs are available, update:
+### Error Handling
+- Always return a JSON error response with a descriptive message.
+- Log the error with `console.error('[METHOD /path]', err)` including the actual error object.
+- Never call `next(err)` — there is no Express error middleware in this project.
 
-### `backend/config.js` — Service URLs
-```js
-// Set these as env vars or change defaults:
-authServiceUrl:     process.env.AUTH_SERVICE_URL      || 'http://auth:4000',
-productosServiceUrl: process.env.PRODUCTOS_SERVICE_URL || 'http://catalogo:4001',
-pagosServiceUrl:    process.env.PAGOS_SERVICE_URL     || 'http://pagos:4002',
-notificacionesServiceUrl: process.env.NOTIFICACIONES_SERVICE_URL || 'http://notificaciones:4003',
-enviosServiceUrl:   process.env.ENVIOS_SERVICE_URL    || 'http://envios:4004',
-```
-
-### `backend/server.js` — Remove Dual DB Fallback
-Simplify pool creation when DB URL is known:
-```js
-// BEFORE (auto-detect):
-let pool;
-try { pool = await tryPool(config.db); }
-catch (e) { pool = await tryPool(config.externalDb); }
-
-// AFTER (single pool):
-const pool = new Pool(config.db);
-```
-
-### No Changes Needed
-- `services/authClient.js` and `services/pagosClient.js`: Use `createServiceClient()` which reads from config.js — updated automatically.
-- `lib/adapters.js`: No URL hardcodes.
+### JWT / Auth
+- Use the `verificarToken` middleware passed to the route factory.
+- Do NOT implement auth logic inside routes.
+- `transacciones.js` and `eventos.js` are exceptions (no token check).
