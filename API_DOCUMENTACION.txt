@@ -1,0 +1,595 @@
+================================================================================
+  SISTEMA D COMPRA — DOCUMENTACIÓN DE APIs
+  Microservicio: CARRITO (backend/)
+  Puerto: 3000
+  Última actualización: Mayo 2026 (v3 — Cloud Run)
+================================================================================
+
+================================================================================
+  MODOS DE DESPLIEGUE
+================================================================================
+
+  Este microservicio está diseñado exclusivamente para Google Cloud Run.
+  NO soporta ejecución local independiente.
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                    ARQUITECTURA CLOUD RUN                           │
+  │                                                                     │
+  │   Frontend (Cloud Run / Firebase)                                   │
+  │       │                                                             │
+  │       ├── /api/carrito/*     → carrito-srv (Cloud Run :3000)        │
+  │       ├── /api/auth/*        → auth-srv (Cloud Run)                 │
+  │       ├── /api/catalogo/*    → catalogo-srv (Cloud Run)             │
+  │       ├── /api/pagos/*       → pagos-srv (Cloud Run)                │
+  │       ├── /api/notificaciones/* → notificaciones-srv (Cloud Run)    │
+  │       └── /api/envios/*      → envios-srv (Cloud Run)               │
+  │                                                                     │
+  │   carrito-srv:3000                                                  │
+  │       ├── Socket.IO (ws/wss) — eventos en tiempo real                │
+  │       ├── PostgreSQL (Cloud SQL) a través de socket Unix            │
+  │       ├── Redis (Memorystore) — adaptador Socket.IO multi-instancia │
+  │       └── Cloud Scheduler → POST /internal/*                        │
+  │                                                                     │
+  └──────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+  1. APIs QUE EL CARRITO EXPONE (hacia el frontend)
+================================================================================
+
+  Conexión directa desde el frontend al carrito-srv:
+  Frontend llama a https://carrito-srv-xxxxx-REGION.a.run.app/api/{ruta}
+  (o a través de un gateway/ingress que enrute /api/carrito/*)
+
+  -------------------------
+  CARRITO (/api/carrito)
+  -------------------------
+  GET    /api/carrito                    → Obtener carrito del usuario autenticado
+                                           Retorna: { items: [...], subtotal: number, envio: number, total: number }
+                                           Cada item: { id, producto_id, nombre, cantidad, precio_unitario, imagen_url, vendedor_id }
+
+  POST   /api/carrito/agregar           → Agregar producto al carrito
+                                           Body: { producto_id: number, nombre: string, precio_unitario: number, cantidad: number }
+                                           Retorna: { message, data: { id, producto_id, cantidad, precio_unitario } }
+
+  POST   /api/carrito/fusionar          → Fusionar carrito invitado con carrito usuario (post-login)
+                                           Body: { items: [{ producto_id, cantidad, precio_unitario, nombre, vendedor_id }] }
+                                           Retorna: { message, data: { items_agregados, items_omitidos } }
+
+  PATCH  /api/carrito/actualizar/:producto_id
+                                         → Actualizar cantidad de un item
+                                           Body: { cantidad: number }
+                                           Retorna: { message, data: { cantidad } }
+
+  DELETE /api/carrito/eliminar          → Eliminar un item del carrito
+                                           Body: { producto_id: number }
+                                           Retorna: { message }
+
+  POST   /api/carrito/vaciar            → Vaciar todo el carrito del usuario
+                                           Retorna: { message }
+
+  GET    /api/carrito/datos-pago        → Obtener datos de pago del carrito (incluye fees y breakdown)
+                                           Retorna: { items, subtotal, envio, total, moneda, fees }
+
+  -------------------------
+  CHECKOUT (/api/checkout)
+  -------------------------
+  POST   /api/checkout/iniciar          → Iniciar proceso de compra
+                                           Body: { direccion_envio_id: number, items: [{ producto_id, cantidad }] }
+                                           Retorna: { message, checkout_id, redirect_url }
+                                           (Crea pedido en estado PENDIENTE, genera preferencia en MercadoPago,
+                                            devuelve URL de pago para redirigir al frontend)
+
+  GET    /api/checkout/:id              → Obtener estado de un checkout específico
+                                           Retorna: { id, estado, ... }
+
+  -------------------------
+  PEDIDOS (/api/pedidos)
+  -------------------------
+  GET    /api/pedidos                   → Listar pedidos del usuario autenticado
+                                           Retorna: { total: number, pedidos: [{ id, estado, total, fecha_creacion, items, transaccion, envio }] }
+
+  GET    /api/pedidos/:id               → Detalle de un pedido específico
+                                           Retorna: { pedido: { id, estado, items, total, direccion_envio, transaccion, envio } }
+
+  PATCH  /api/pedidos/:id/estado        → Actualizar estado de un pedido (solo vendedor)
+                                           Body: { estado: string }
+                                           Estados válidos: PENDIENTE → PROCESANDO → ENVIADO → ENTREGADO
+                                           Cancelación: PENDIENTE → CANCELADO
+                                           Retorna: { message, data: { id, estado } }
+
+  -------------------------
+  DIRECCIONES (/api/direcciones)
+  -------------------------
+  GET    /api/direcciones               → Listar direcciones del usuario (máx 5)
+                                           Retorna: { direcciones: [{ id, alias, calle, ciudad, departamento, codigo_postal, predeterminada, created_at }] }
+
+  POST   /api/direcciones               → Crear nueva dirección
+                                           Body: { alias: string, calle: string, ciudad: string, departamento: string, codigo_postal: string, predeterminada: boolean }
+                                           Retorna: { message, data: { id, alias, calle, ciudad, departamento, codigo_postal, predeterminada } }
+
+  PATCH  /api/direcciones/:id           → Actualizar dirección existente
+                                           Body: (mismos campos que POST, todos opcionales)
+                                           Retorna: { message, data: { id, ... } }
+
+  DELETE /api/direcciones/:id           → Eliminar dirección
+                                           Retorna: { message }
+
+  -------------------------
+  TRANSACCIONES (/api/transacciones)
+  -------------------------
+  GET    /api/transacciones             → Listar transacciones del usuario autenticado
+                                           Retorna: { total: number, transacciones: [{ id, referencia_externa, estado, monto, moneda, metodo_pago, created_at }] }
+                                           NOTA: No incluye pedido_id (no existe en la tabla)
+
+  GET    /api/transacciones/public/:id/estado
+                                         → Obtener estado público de una transacción (sin auth)
+                                           Retorna: { transaccion: { id, estado, updated_at } }
+                                           NOTA: En producción (NODE_ENV=production) retorna 404
+
+  -------------------------
+  PRODUCTOS (proxy al catálogo /api/productos)
+  -------------------------
+  GET    /api/productos                 → Listar todos los productos
+                                           Retorna: { productos: [...] } (desde el catálogo)
+
+  GET    /api/productos/:id             → Obtener detalle de un producto
+                                           Retorna: { producto: { id, nombre, descripcion, precio, stock, ... } }
+
+  GET    /api/productos/recomendaciones → Obtener recomendaciones para el usuario
+                                           Query: userId (opcional), limit (opcional, default 10)
+                                           Retorna: { recomendaciones: [...] }
+
+  GET    /api/productos/lista           → Lista de productos por IDs
+                                           Query: ids (comma-separated)
+                                           Retorna: { productos: [...] }
+
+  -------------------------
+  VENDEDOR (/api/vendedor)
+  -------------------------
+  GET    /api/vendedor/pedidos          → Listar pedidos de productos del vendedor (requiere rol vendedor)
+                                           Retorna: { total: number, pedidos: [...] }
+                                           Estados del vendedor: PENDIENTE, PROCESANDO, ENVIADO, ENTREGADO, CANCELADO
+
+  GET    /api/vendedor/pedidos/:id      → Detalle de un pedido como vendedor
+                                           Retorna: { pedido: { ... } }
+
+  PATCH  /api/vendedor/pedidos/:id/estado
+                                         → Cambiar estado de un pedido (vendedor)
+                                           Body: { estado: string }
+
+  GET    /api/vendedor/estadisticas     → Estadísticas del vendedor (ventas, totales, etc.)
+                                           Retorna: { total_ventas, total_ingresos, ... }
+
+  -------------------------
+  EVENTOS (/api/eventos)
+  -------------------------
+  POST   /api/eventos/reintentar        → Reintentar eventos pendientes fallidos
+                                           Retorna: { message, reintentados: number }
+
+  -------------------------
+  WEBHOOK (/api/webhook)
+  -------------------------
+  POST   /api/webhook/pago-confirmado   → Webhook de confirmación de pago (MercadoPago)
+                                           Body: { evento: string, transaccion_id: string, referencia_externa: string, estado: string, monto: number, fecha_pago: string }
+                                           Autenticación: HMAC-SHA256 con PAGOS_WEBHOOK_SECRET
+                                           NO requiere token JWT (endpoint público)
+                                           Idempotente: INSERT ON CONFLICT (transaccion_id) DO NOTHING
+                                           Retorna: { message, pedido_id, duplicado: boolean }
+
+  -------------------------
+  HEALTH & INFO
+  -------------------------
+  GET    /health                        → Health check (para Cloud Run)
+                                           Retorna: { status: 'ok', timestamp, uptime }
+                                           Autenticación: ninguna
+                                           Uso: Cloud Run startup/readiness probe
+
+================================================================================
+  2. CONEXIÓN A BASE DE DATOS
+================================================================================
+
+  Esquema dedicado: carrito_ms (aislamiento multi-tenant)
+  Pool configurado con search_path: carrito_ms, public
+
+  Variables de entorno requeridas:
+    DB_HOST (obligatorio — socket Unix en Cloud Run)
+    DB_PORT (default 5432)
+    DB_USER (obligatorio)
+    DB_PASSWORD (obligatorio)
+    DB_NAME (obligatorio)
+    DB_SCHEMA (default: carrito_ms)
+
+  En Cloud Run, la conexión usa socket Unix de Cloud SQL:
+    DB_HOST=/cloudsql/INSTANCE_CONNECTION_NAME
+    (No se necesita IP ni SSL por separado)
+
+  Parámetros de conexión:
+    - Pool máximo: config.poolMax (default 20)
+    - Pool mínimo: config.poolMin (default 0)
+    - Timeout de adquisición: config.poolAcquire (default 30000ms)
+    - Timeout de inactividad: config.poolIdle (default 10000ms)
+    - SSL: habilitado automáticamente en Cloud SQL
+
+================================================================================
+  3. CLIENTES DE SERVICIOS EXTERNOS
+================================================================================
+
+  Todos los clientes HTTP usan createServiceClient desde backend/lib/adapters.js,
+  que provee:
+    - Timeout configurable (default 5s)
+    - 1 reintento automático en caso de error
+    - AbortController para cancelación
+    - createServiceClient(baseUrl, defaultOptions)
+
+  -------------------------
+  3.1 authClient.js — Servicio de Autenticación
+  -------------------------
+  POST   /login
+           Body: { email: string, password: string }
+           Retorna: { token, usuario: { id, nombre, email, rol } }
+
+  POST   /register
+           Body: { email: string, password: string, nombre: string }
+           Retorna: { token, usuario: { id, nombre, email, rol } }
+
+  GET    /me
+           Header: Authorization: Bearer <token>
+           Retorna: { id, nombre, email, rol }
+           (Valida el token JWT contra el servicio de auth)
+
+  -------------------------
+  3.2 productosClient.js — Servicio de Catálogo
+  -------------------------
+  getProductos(queryParams?)
+    GET    /productos
+    Retorna: { productos: [...] }
+
+  getProducto(id)
+    GET    /productos/:id
+    Retorna: producto object
+
+  verificarStock(productoId, cantidad)
+    GET    /productos/:productoId/stock?cantidad=N
+    Retorna: { disponible: boolean, stock_actual: number }
+
+  deducirStock(productoId, cantidad)
+    POST   /productos/:productoId/descontar-stock
+    Body: { cantidad: number }
+    Retorna: { success: boolean }
+
+  getRecommendations(userId?, limit?)
+    GET    /productos/recomendaciones?userId=N&limit=N
+    Retorna: { recomendaciones: [...] }
+
+  -------------------------
+  3.3 pagosClient.js — Servicio de Pagos
+  -------------------------
+  crearCheckout({ usuario, items, total, moneda, url_redirect_ok, url_redirect_error })
+    POST   /pagos/crear-checkout
+    Retorna: { checkout_id, redirect_url, ... }
+
+  verificarSignature(payload, signature)
+    Función local de verificación HMAC-SHA256
+    payload: string (cuerpo raw del webhook)
+    signature: string (firma del header)
+    Retorna: boolean
+
+  solicitarReembolso(transaccionId)
+    POST   /pagos/reembolso
+    Body: { transaccion_id: string }
+    Retorna: { success: boolean, ... }
+
+  -------------------------
+  3.4 notificacionesPedidosClient.js — Servicio de Notificaciones
+  -------------------------
+  notificarPedidoCreado(pedidoId, usuarioId, datosPedido)
+    POST   /notificaciones/pedido-creado
+    Retorna: { success: boolean }
+
+  notificarCambioEstado(pedidoId, usuarioId, estadoNuevo)
+    POST   /notificaciones/cambio-estado
+    Retorna: { success: boolean }
+
+  notificarCancelacion(pedidoId, usuarioId, motivo)
+    POST   /notificaciones/cancelacion
+    Retorna: { success: boolean }
+
+  notificarReembolso(usuarioId, monto, transaccionId)
+    POST   /notificaciones/reembolso
+    Retorna: { success: boolean }
+
+  -------------------------
+  3.5 enviosClient.js — Servicio de Envíos
+  -------------------------
+  crearEnvio(datos)
+    datos: { pedido_id, direccion_envio_id, items, monto_total }
+    POST   /envios/crear
+    Retorna: { envio_id, ... }
+
+  getEstadoEnvio(pedidoId)
+    GET    /envios/estado/:pedidoId
+    Retorna: { estado, ... }
+
+================================================================================
+  4. SOCKET.IO — EVENTOS EN TIEMPO REAL
+================================================================================
+
+  El servidor Socket.IO corre en el mismo puerto que Express (:3000).
+  Usa Redis adapter para soporte multi-instancia (escalado horizontal).
+
+  Configuración:
+    REDIS_HOST (opcional — si no se configura, funciona en single-instance)
+    REDIS_PORT (default: 6379)
+
+  Autenticación:
+    El cliente envía el token JWT en el handshake:
+      io("https://carrito-srv-xxxxx-REGION.a.run.app", {
+        auth: { token: "Bearer <jwt>" }
+      })
+    O en query params:
+      io("...", { query: { token: "Bearer <jwt>" } })
+    El servidor valida contra authClient.validateToken()
+    Si el token es inválido o expirado, la conexión es rechazada.
+
+  Eventos que emite el servidor:
+    - pedido_actualizado  → { pedido_id, estado, timestamp }
+    - pago_confirmado     → { pedido_id, transaccion_id, estado, monto }
+    - carrito_sincronizado → { action, data }
+
+  Rooms:
+    - usuario_{id}  → eventos para un usuario específico
+    - vendedor_{id}  → eventos para un vendedor específico
+
+  El frontend solo escucha (no emite eventos de negocio).
+
+================================================================================
+  5. AUTENTICACIÓN Y AUTORIZACIÓN
+================================================================================
+
+  Modo: CLOUD RUN (autenticación delegada al servicio de auth)
+  - Siempre usa authClient.validateToken() vía HTTP
+  - No existe DEV_MODE ni autenticación local
+
+  Middleware: verificarToken (creado en server.js)
+    Se pasa a cada factory de rutas.
+    1. Extrae token del header Authorization: Bearer <token>
+    2. Llama a authClient.validateToken(token)
+    3. Asigna req.usuario = datosDelUsuario
+    4. Si el token es inválido → 401 { error: 'Token inválido o expirado.' }
+
+  Middleware de vendedor: (backend/routes/vendedorMiddleware.js)
+    Verifica req.usuario.rol === 'vendedor'
+    Se aplica a todas las rutas de /api/vendedor/*
+    Si no es vendedor → 403 { error: 'Solo vendedores.' }
+
+================================================================================
+  6. ENDPOINTS INTERNOS (CLOUD SCHEDULER)
+================================================================================
+
+  Endpoints para tareas programadas (sin autenticación JWT).
+  Autenticación: X-Internal-Key (comparación timing-safe con INTERNAL_API_KEY)
+
+  POST   /internal/ttl-carritos          → Limpiar carritos abandonados (>30 días inactivos)
+                                           Retorna: { message, eliminados: number }
+                                           Programa sugerido: cada 24 horas
+
+  POST   /internal/retry-eventos          → Reintentar eventos pendientes fallidos
+                                           Retorna: { message, reintentados: number }
+                                           Programa sugerido: cada 2 minutos
+                                           Procesa eventos con estado 'pendiente' e intentos < 5
+                                           Backoff exponencial entre reintentos
+
+================================================================================
+  7. RATE LIMITERS
+================================================================================
+
+  Configurados con express-rate-limit en server.js:
+
+  1. General (aplica a todas las rutas /api/*)
+       Ventana: 1 minuto
+       Máximo: 100 peticiones
+       Mensaje: { error: 'Demasiadas solicitudes. Intenta de nuevo en un minuto.' }
+
+  2. Checkout (aplica solo a POST /api/checkout/iniciar)
+       Ventana: 10 minutos
+       Máximo: 5 intentos
+       Mensaje: { error: 'Demasiados intentos de checkout. Espera 10 minutos.' }
+
+  3. Auth (aplica a POST /api/auth/* — endpoints locales si existieran)
+       Ventana: 15 minutos
+       Máximo: 20 intentos
+       NOTA: Actualmente no hay rutas de auth locales (se delega al servicio externo).
+             Definido para futuros endpoints de auth locales.
+
+================================================================================
+  8. IDEMPOTENCIA DE WEBHOOK
+================================================================================
+
+  POST /api/webhook/pago-confirmado usa ON CONFLICT (transaccion_id) DO NOTHING
+  para evitar duplicación de pedidos ante webhooks repetidos de MercadoPago.
+
+  Flujo:
+    1. Recibe webhook con evento, transaccion_id, referencia_externa, estado, monto
+    2. Verifica firma HMAC-SHA256
+    3. INSERT INTO pedidos con ON CONFLICT (transaccion_id) DO NOTHING
+    4. Si es duplicado → retorna 200 { duplicado: true }
+    5. Si es nuevo → procesa el pago, retorna 200 { pedido_id, duplicado: false }
+
+  La constraint uq_pedidos_transaccion_id existe en la tabla pedidos.
+
+================================================================================
+  9. ESQUEMA DE BASE DE DATOS (carrito_ms)
+================================================================================
+
+  Las tablas del carrito residen en el esquema carrito_ms para aislamiento.
+  Pool configurado con search_path: carrito_ms, public
+
+  Tablas migradas al esquema carrito_ms:
+    - carrito
+    - carrito_items
+    - pedidos
+    - pedido_items
+    - transacciones
+    - direcciones
+    - eventos_pendientes
+
+  Migraciones disponibles:
+    007_schema_aislamiento.sql — CREATE SCHEMA carrito_ms + ALTER TABLE SET SCHEMA
+    008_fk_set_null.sql — direcciones FK con ON DELETE SET NULL en transacciones y pedidos
+
+================================================================================
+  10. VARIABLES DE ENTORNO REQUERIDAS
+================================================================================
+
+  validateEnv() en server.js verifica en startup que las siguientes variables
+  estén definidas. Si falta alguna, el servidor no arranca:
+
+  Obligatorias (9):
+    JWT_SECRET           — Secreto JWT
+    DB_HOST              — Host de PostgreSQL (socket Unix en Cloud Run)
+    DB_USER              — Usuario de base de datos
+    DB_PASSWORD          — Contraseña de base de datos
+    DB_NAME              — Nombre de base de datos
+    AUTH_SERVICE_URL     — URL del servicio de autenticación
+    PRODUCTOS_SERVICE_URL — URL del servicio de catálogo
+    PAGOS_SERVICE_URL    — URL del servicio de pagos
+    INTERNAL_API_KEY     — API key para endpoints internos
+
+  Opcionales con advertencia:
+    REDIS_HOST           — Host de Redis (requerido para multi-instancia Socket.IO)
+
+  Otras variables usadas en config.js:
+    PORT                 — Puerto del servidor (default: 3000)
+    DB_PORT              — Puerto de PostgreSQL (default: 5432)
+    DB_SCHEMA            — Esquema de base de datos (default: carrito_ms)
+    DB_POOL_MAX          — Pool máximo (default: 20)
+    DB_POOL_MIN          — Pool mínimo (default: 0)
+    DB_POOL_ACQUIRE      — Timeout adquisición (default: 30000ms)
+    DB_POOL_IDLE         — Timeout inactividad (default: 10000ms)
+    AUTH_SERVICE_URL     — URL base del servicio de auth
+    PRODUCTOS_SERVICE_URL — URL base del servicio de catálogo
+    PAGOS_SERVICE_URL    — URL base del servicio de pagos
+    PAGOS_WEBHOOK_SECRET — Secreto HMAC para webhooks
+    PAGOS_API_KEY        — API key para servicio de pagos
+    NOTIFICACIONES_SERVICE_URL — URL del servicio de notificaciones
+    ENVIOS_SERVICE_URL   — URL del servicio de envíos
+    TU_LOCAL_URL         — URL del frontend (para CORS)
+    URL_PAGO_OK          — Redirect URL después de pago exitoso
+    URL_PAGO_ERROR       — Redirect URL después de pago fallido
+    NODE_ENV             — Entorno (production/development)
+    CORS_ORIGINS         — Orígenes CORS permitidos (separados por coma)
+
+================================================================================
+  11. FUNCIONAMIENTO INTERNO
+================================================================================
+
+  -------------------------
+  server.js — Bootstrap
+  -------------------------
+  - Crea pool de conexión a PostgreSQL
+  - Configura trust proxy: 1 (Cloud Run)
+  - Captura raw body antes de express.json() para verificación HMAC
+  - Configura Socket.IO con Redis adapter (condicional)
+  - Conecta todos los routers con factory pattern
+  - Llama a validateEnv() en startup (falla rápido si faltan variables)
+  - Graceful shutdown en SIGTERM/SIGINT (10s timeout, cierra HTTP y DB pool)
+
+  -------------------------
+  Route Factory Pattern
+  -------------------------
+  Cada archivo en routes/ exporta una función:
+    module.exports = (pool, verificarToken, io) => {
+      const router = express.Router();
+      // ... rutas ...
+      return router;
+    }
+
+  -------------------------
+  Manejo de Errores
+  -------------------------
+  Cada handler usa try/catch con:
+    return res.status(4xx/5xx).json({ error: 'Mensaje descriptivo.' })
+  No se usa middleware de error global.
+
+  -------------------------
+  Graceful Shutdown
+  -------------------------
+  server.close() + pool.end() en SIGTERM/SIGINT
+  Force kill después de 10s si no termina solo
+
+================================================================================
+  12. NOTAS DE CÓDIGO (BUGS CONOCIDOS)
+================================================================================
+
+  El código contiene marcas BUG-NN que documentan fixes intencionales:
+    BUG-01 — [carrito.js] Precio unitario inconsistente al fusionar carritos
+    BUG-03 — [checkout.js] Error al obtener dirección en checkout si es undefined
+    BUG-05 — [pedidos.js] Estado incorrecto después de pago con tarjeta rechazada
+    BUG-06 — [pedidos.js] Pedido duplicado por webhook sin idempotencia
+    BUG-09 — [transacciones.js] Transacción sin pedido asociado
+    BUG-10 — [vendedor.js] Vendedor procesando pedido de otro vendedor
+
+  No remover estas marcas — documentan fixes históricos.
+
+================================================================================
+  13. DESPLIEGUE EN CLOUD RUN
+================================================================================
+
+  Requisitos:
+    - Google Cloud Project con Cloud Run, Cloud SQL, Cloud Scheduler
+    - PostgreSQL 15 en Cloud SQL
+    - Redis (Memorystore) opcional para Socket.IO multi-instancia
+
+  Variables de entorno (Cloud Run):
+    PORT=3000
+    DB_HOST=/cloudsql/PROJECT:REGION:INSTANCE
+    DB_USER=postgres
+    DB_PASSWORD=... (Secret Manager)
+    DB_NAME=sistema_d_compra
+    DB_SCHEMA=carrito_ms
+    JWT_SECRET=... (Secret Manager)
+    AUTH_SERVICE_URL=https://auth-srv-xxxxx-REGION.a.run.app
+    PRODUCTOS_SERVICE_URL=https://catalogo-srv-xxxxx-REGION.a.run.app
+    PAGOS_SERVICE_URL=https://pagos-srv-xxxxx-REGION.a.run.app
+    NOTIFICACIONES_SERVICE_URL=https://notificaciones-srv-xxxxx-REGION.a.run.app
+    ENVIOS_SERVICE_URL=https://envios-srv-xxxxx-REGION.a.run.app
+    INTERNAL_API_KEY=... (Secret Manager)
+    TU_LOCAL_URL=https://frontend-xxxxx-REGION.a.run.app
+    URL_PAGO_OK=https://frontend-xxxxx-REGION.a.run.app/confirmacion?status=ok
+    URL_PAGO_ERROR=https://frontend-xxxxx-REGION.a.run.app/confirmacion?status=error
+    CORS_ORIGINS=https://frontend-xxxxx-REGION.a.run.app
+
+  Cloud Scheduler:
+    POST /internal/ttl-carritos     → cada 24h
+    POST /internal/retry-eventos    → cada 2min
+    Header: X-Internal-Key: <INTERNAL_API_KEY>
+
+  Cloud SQL:
+    Conexión vía socket Unix (no IP pública)
+    Migraciones: database/migrations/007_schema_aislamiento.sql, 008_fk_set_null.sql
+
+================================================================================
+  14. ARQUITECTURA DE ADAPTADORES (createServiceClient)
+================================================================================
+
+  backend/lib/adapters.js exporta:
+
+    createServiceClient(baseUrl, defaultOptions = {})
+      → { request, requestWithRetry }
+
+    request(endpoint, options = {})
+      → fetch nativo con timeout (AbortController, 5s default)
+      → headers por defecto: Content-Type application/json
+      → respuesta parseada como JSON
+
+    requestWithRetry(endpoint, options = {})
+      → Llama a request()
+      → 1 reintento en caso de error (delay 1s)
+      → Lanza error descriptivo si falla
+
+  Los 5 clientes de servicio usan esta factory en lugar de crear su propio fetch.
+  Esto garantiza timeout, retry y manejo de errores consistente.
+
+================================================================================
+  FIN DE DOCUMENTACIÓN
+================================================================================
