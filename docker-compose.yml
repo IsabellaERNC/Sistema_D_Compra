@@ -1,0 +1,212 @@
+version: '3.8'
+
+# ============================================
+# DOCKER COMPOSE - Sistema D Compra
+# ============================================
+# USO:
+#   docker-compose up --build
+#
+# Todos los microservicios se comunican por nombre DNS interno.
+# El gateway Nginx expone http://localhost:8080 como único punto de entrada.
+#
+# CUSTOMIZAR:
+#   - build: ./auth, ./catalogo, ./pagos, ./notificaciones, ./envios
+#     (reemplazar con las rutas reales de cada proyecto)
+#   - JWT_SECRET: cambiar en producción
+#   - PAGOS_WEBHOOK_SECRET: debe coincidir con el secreto que pagos use para firmar
+# ============================================
+
+services:
+
+  # ============================================
+  # GATEWAY - Nginx como reverse proxy
+  # Expone http://localhost:8080/api/{servicio}/*
+  # ============================================
+  nginx:
+    image: nginx:alpine
+    container_name: gateway
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - auth
+      - catalogo
+      - pagos
+      - notificaciones
+      - envios
+      - carrito
+    networks:
+      - internal
+
+  # ============================================
+  # BASE DE DATOS - PostgreSQL compartida
+  # Un solo Postgres, schemas por microservicio
+  # ============================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: sistema_d_compra
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 1234
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  # ============================================
+  # MICROSERVICIO AUTH
+  # CUSTOMIZAR: ruta del proyecto auth
+  # ============================================
+  auth:
+    build: ./auth                    # <-- CUSTOMIZAR: ruta del proyecto auth
+    container_name: auth
+    ports:
+      - "4000:4000"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sistema_d_compra
+      - DB_USER=postgres
+      - DB_PASSWORD=1234
+      - JWT_SECRET=super_secret_jwt_2024
+    depends_on:
+      - postgres
+    networks:
+      - internal
+
+  # ============================================
+  # MICROSERVICIO CATÁLOGO/PRODUCTOS
+  # CUSTOMIZAR: ruta del proyecto catálogo
+  # ============================================
+  catalogo:
+    build: ./catalogo                # <-- CUSTOMIZAR: ruta del proyecto catálogo
+    container_name: catalogo
+    ports:
+      - "4001:4001"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sistema_d_compra
+      - DB_USER=postgres
+      - DB_PASSWORD=1234
+    depends_on:
+      - postgres
+    networks:
+      - internal
+
+  # ============================================
+  # MICROSERVICIO PAGOS
+  # CUSTOMIZAR: ruta del proyecto pagos
+  # ============================================
+  pagos:
+    build: ./pagos                   # <-- CUSTOMIZAR: ruta del proyecto pagos
+    container_name: pagos
+    ports:
+      - "4002:4002"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sistema_d_compra
+      - DB_USER=postgres
+      - DB_PASSWORD=1234
+      # URL que pagos usará para llamar al webhook de carrito
+      - CARTO_SERVICE_URL=http://carrito:3000
+    depends_on:
+      - postgres
+      - carrito
+    networks:
+      - internal
+
+  # ============================================
+  # MICROSERVICIO NOTIFICACIONES
+  # CUSTOMIZAR: ruta del proyecto notificaciones
+  # ============================================
+  notificaciones:
+    build: ./notificaciones          # <-- CUSTOMIZAR: ruta del proyecto notificaciones
+    container_name: notificaciones
+    ports:
+      - "4003:4003"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sistema_d_compra
+      - DB_USER=postgres
+      - DB_PASSWORD=1234
+    depends_on:
+      - postgres
+    networks:
+      - internal
+
+  # ============================================
+  # MICROSERVICIO ENVÍOS
+  # CUSTOMIZAR: ruta del proyecto envíos
+  # ============================================
+  envios:
+    build: ./envios                  # <-- CUSTOMIZAR: ruta del proyecto envíos
+    container_name: envios
+    ports:
+      - "4004:4004"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sistema_d_compra
+      - DB_USER=postgres
+      - DB_PASSWORD=1234
+    depends_on:
+      - postgres
+    networks:
+      - internal
+
+  # ============================================
+  # MICROSERVICIO CARRITO (TU PROYECTO)
+  # ============================================
+  carrito:
+    build: ./backend                 # Dockerfile en backend/
+    container_name: carrito
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sistema_d_compra
+      - DB_USER=postgres
+      - DB_PASSWORD=1234
+      # URLs de servicios internos (nombres DNS de docker)
+      - AUTH_SERVICE_URL=http://auth:4000
+      - PRODUCTOS_SERVICE_URL=http://catalogo:4001
+      - PAGOS_SERVICE_URL=http://pagos:4002
+      - NOTIFICACIONES_SERVICE_URL=http://notificaciones:4003
+      - ENVIOS_SERVICE_URL=http://envios:4004
+      # Secrets
+      - JWT_SECRET=super_secret_jwt_2024
+      - PAGOS_WEBHOOK_SECRET=secreto_webhook_pagos_2024
+      - DEV_MODE=false               # false = validar token contra auth service
+    depends_on:
+      - postgres
+    networks:
+      - internal
+
+  # ============================================
+  # FRONTEND - Vite
+  # ============================================
+  frontend:
+    build: ./frontend                # Dockerfile en frontend/
+    container_name: frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8080/api
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
